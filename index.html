@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <title>Corujão — Adega</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<div id="app" class="app">
+
+  <!-- ═══════════ HEADER ═══════════ -->
+  <header class="header">
+    <span class="header-logo">🦉 Corujão</span>
+    <div class="header-right">
+      <span class="header-admin" id="auth-user">Adega Corujão</span>
+      <button id="auth-logout" class="btn-icon" title="Sair" style="display:none">⎋</button>
+    </div>
+  </header>
+
+  <!-- Alertas de estoque removidos por solicitação -->
+  <div id="alertas-estoque" class="hidden"></div>
+
+  <!-- ═══════════ CONTEÚDO DAS ABAS ═══════════ -->
+  <main class="main-content">
+
+    <!-- ════════ DASHBOARD ════════ -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div class="cards-grid">
+        <div class="card card-green">
+          <span class="card-label">Hoje</span>
+          <span class="card-value" id="dash-hoje">R$ 0,00</span>
+        </div>
+        <div class="card card-blue">
+          <span class="card-label">Semana</span>
+          <span class="card-value" id="dash-semana">R$ 0,00</span>
+        </div>
+        <div class="card card-purple">
+          <span class="card-label">Mês</span>
+          <span class="card-value" id="dash-mes">R$ 0,00</span>
+        </div>
+        <div class="card card-orange">
+          <span class="card-label">Lucro Est. Mês</span>
+          <span class="card-value" id="dash-lucro">R$ 0,00</span>
+        </div>
+        <div class="card card-red">
+          <span class="card-label">Gastos Mês</span>
+          <span class="card-value" id="dash-gastos">R$ 0,00</span>
+        </div>
+        <div class="card card-yellow">
+          <span class="card-label">Estoque Baixo</span>
+          <span class="card-value" id="dash-estoque-baixo">0</span>
+        </div>
+        <div class="card card-blue">
+          <span class="card-label">Total em Estoque</span>
+          <span class="card-value" id="dash-total-estoque">0</span>
+        </div>
+      </div>
+
+      <h3 class="section-title">Mais Vendidos</h3>
+      <div id="dash-mais-vendidos" class="lista-ranking"></div>
+
+      <h3 class="section-title">Estoque Baixo ⚠️</h3>
+      <div id="dash-alerta-estoque" class="lista-alertas"></div>
+
+      <h3 class="section-title">Últimas Vendas</h3>
+      <div id="dash-ultimas-vendas" class="lista-vendas-dash"></div>
+    </section>
+
+    <!-- ════════ VENDAS ════════ -->
+    <section id="tab-vendas" class="tab-content">
+
+      <!-- Abas mobile: alterna entre Produtos e Carrinho -->
+      <div class="pdv-mobile-tabs" id="pdv-mobile-tabs">
+        <button type="button" class="pdv-mobile-tab active" data-pdv-tab="catalogo">
+          🛍️ Produtos
+        </button>
+        <button type="button" class="pdv-mobile-tab" data-pdv-tab="caixa">
+          🛒 Carrinho
+          <span class="pdv-mobile-tab-badge" id="pdv-mobile-badge" style="display:none">0</span>
+        </button>
+      </div>
+
+      <!-- Layout 2 colunas: catálogo + caixa -->
+      <div class="pdv-layout">
+
+        <!-- ── CATÁLOGO (esquerda) ── -->
+        <div class="pdv-catalogo">
+
+          <!-- Topo: título + busca + banner combo -->
+          <div class="pdv-catalogo-top">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+              <span class="pdv-catalogo-title">Vender</span>
+            </div>
+            <div class="pdv-busca-wrap">
+              <span class="pdv-busca-icon">🔍</span>
+              <input
+                type="search"
+                id="busca-produto"
+                placeholder="Buscar produtos..."
+                autocomplete="off"
+                aria-label="Buscar produto"
+              />
+            </div>
+            <!-- Chips de categoria — preenchidos dinamicamente pelo JS -->
+            <div id="category-chips" class="category-chips">
+              <button class="chip active" data-category="">Todos</button>
+            </div>
+            <!-- Banner: Monte seu Combo Personalizado -->
+            <div class="combo-custom-banner">
+              <div class="combo-custom-banner-info">
+                <span class="combo-custom-banner-emoji">🎯</span>
+                <div>
+                  <div class="combo-custom-banner-titulo">Monte seu Combo Personalizado</div>
+                  <div class="combo-custom-banner-sub">Copão · Energético · Gelo · Tamanho do copo</div>
+                </div>
+              </div>
+              <button id="btn-montar-combo-custom" type="button" class="combo-custom-banner-btn">
+                Montar
+              </button>
+            </div>
+          </div>
+
+          <!-- Grid de cards de produto -->
+          <div id="resultados-busca" class="pdv-produtos-grid"></div>
+
+        </div><!-- /pdv-catalogo -->
+
+        <!-- ── CAIXA / CORUJÃO (direita / drawer mobile) ── -->
+        <div id="pdv-drawer-overlay" class="pdv-drawer-overlay"></div>
+        <aside class="pdv-caixa">
+
+          <!-- Cabeçalho "Corujão" -->
+          <div class="pdv-caixa-header">
+            <h3>🦉 Corujão</h3>
+            <div class="pdv-caixa-actions">
+              <span id="pdv-contagem" class="pdv-contagem-badge">0 itens</span>
+              <button type="button" class="pdv-drawer-close" id="btn-fechar-drawer" aria-label="Fechar carrinho">✕</button>
+            </div>
+          </div>
+
+          <!-- Lista de itens do carrinho -->
+          <div id="pdv-itens" class="pdv-carrinho-lista"></div>
+
+          <!-- Rodapé: total + pagamento + botão finalizar -->
+          <div class="pdv-rodape">
+
+            <!-- Total -->
+            <div class="pdv-total-row">
+              <span class="pdv-total-label">Total</span>
+              <span id="pdv-total" class="pdv-total-valor">R$ 0,00</span>
+            </div>
+
+            <!-- Forma de pagamento -->
+            <p class="pdv-legenda-pag">Pagamento</p>
+            <div id="pdv-pagamentos" class="pdv-pagamentos" role="group" aria-label="Forma de pagamento">
+              <button data-pagamento="pix" type="button">
+                <span class="pag-icon">💰</span>
+                <span>Pix</span>
+              </button>
+              <button data-pagamento="dinheiro" type="button">
+                <span class="pag-icon">💵</span>
+                <span>Dinheiro</span>
+              </button>
+              <button data-pagamento="debito" type="button">
+                <span class="pag-icon">💳</span>
+                <span>Débito</span>
+              </button>
+              <button data-pagamento="credito" type="button">
+                <span class="pag-icon">💳</span>
+                <span>Crédito</span>
+              </button>
+            </div>
+
+            <!-- Botão finalizar com total inline (estilo imagem) -->
+            <button id="btn-registrar-venda" class="btn-primary btn-large btn-finalizar" disabled>
+              <span>Finalizar venda</span>
+              <span class="btn-finalizar-total" id="btn-total-inline">R$ 0,00</span>
+            </button>
+
+            <!-- Rodapé info: contagem + cancelar -->
+            <div class="pdv-rodape-info">
+              <span id="pdv-contagem-rodape">0 produtos</span>
+              <button type="button" class="pdv-cancelar-btn" id="btn-cancelar-venda">Cancelar</button>
+            </div>
+
+          </div><!-- /pdv-rodape -->
+
+        </aside><!-- /pdv-caixa -->
+
+      </div><!-- /pdv-layout -->
+
+      <!-- Botão flutuante mobile: abre o drawer do carrinho -->
+      <button type="button" class="pdv-caixa-fab fab-oculto" id="btn-abrir-drawer" aria-label="Ver carrinho">
+        <span class="pdv-caixa-fab-left">
+          <span>🛒</span>
+          <span class="pdv-caixa-fab-badge" id="fab-badge">0</span>
+          <span>Ver carrinho</span>
+        </span>
+        <span class="pdv-caixa-fab-total" id="fab-total">R$ 0,00</span>
+        <span class="pdv-caixa-fab-seta">›</span>
+      </button>
+
+      <!-- Últimas vendas do dia -->
+      <div id="painel-ultimas-vendas" class="painel-ultimas">
+        <div class="ultimas-header">
+          <span class="section-title" style="margin:0">Últimas vendas</span>
+          <span id="total-hoje-vendas" class="total-hoje-badge">R$ 0,00 hoje</span>
+        </div>
+        <div id="lista-ultimas-vendas" class="lista-ultimas"></div>
+      </div>
+
+    </section><!-- /tab-vendas -->
+
+    <!-- ════════ PRODUTOS ════════ -->
+    <section id="tab-produtos" class="tab-content">
+      <div class="section-header">
+        <h2>Produtos</h2>
+        <div style="display:flex;gap:8px">
+          <button id="btn-toggle-view" class="btn-secondary btn-sm">📋 Tabela</button>
+          <button id="btn-nova-categoria" class="btn-secondary btn-sm">🏷️ Categoria</button>
+          <button id="btn-novo-produto" class="btn-primary btn-sm">+ Produto</button>
+        </div>
+      </div>
+
+      <div class="filtros-produtos">
+        <input type="text" id="busca-produto-lista" placeholder="🔍 Buscar..." />
+        <select id="filtro-categoria-prod">
+          <option value="">Todas as categorias</option>
+        </select>
+      </div>
+
+      <div id="lista-produtos" class="lista-produtos"></div>
+    </section>
+
+    <!-- ════════ ENTRADA DE MERCADORIA ════════ -->
+    <section id="tab-gastos" class="tab-content">
+      <div id="painel-entrada">
+        <div class="section-header">
+          <h2>Entrada de Mercadorias</h2>
+        </div>
+
+        <div class="cards-grid">
+          <div class="card card-red">
+            <span class="card-label">Investido Hoje</span>
+            <span class="card-value" id="entrada-hoje">R$ 0,00</span>
+          </div>
+          <div class="card card-orange">
+            <span class="card-label">Investido Mês</span>
+            <span class="card-value" id="entrada-mes">R$ 0,00</span>
+          </div>
+        </div>
+
+        <div class="entrada-form-card">
+          <select id="entrada-produto">
+            <option value="">📦 Selecione o produto...</option>
+          </select>
+          <input type="text" id="entrada-fornecedor" placeholder="Fornecedor (opcional)" autocomplete="off" />
+          <div class="venda-nums">
+            <div class="venda-campo">
+              <label>Quantidade</label>
+              <input type="number" id="entrada-quantidade" value="1" min="1" />
+            </div>
+            <div class="venda-campo">
+              <label>Valor unitário (R$)</label>
+              <input type="number" id="entrada-valor-unit" step="0.01" min="0" placeholder="0,00" />
+            </div>
+          </div>
+          <div class="total-entrada-row">
+            <span>Total da compra</span>
+            <span id="entrada-total" class="total-entrada-valor">R$ 0,00</span>
+          </div>
+          <input type="text" id="entrada-obs" placeholder="Observação (opcional)" />
+          <button id="btn-registrar-entrada" class="btn-primary btn-large">📦 Registrar Entrada</button>
+        </div>
+
+        <div class="painel-ultimas">
+          <div class="ultimas-header">
+            <span class="section-title" style="margin:0">Últimas entradas</span>
+          </div>
+          <div id="lista-ultimas-entradas" class="lista-ultimas"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ════════ RELATÓRIOS ════════ -->
+    <section id="tab-relatorios" class="tab-content">
+      <h2 style="margin-bottom:16px">Relatórios</h2>
+
+      <div class="filtros-relatorio">
+        <div class="filtro-row">
+          <input type="date" id="rel-data-ini" />
+          <input type="date" id="rel-data-fim" />
+        </div>
+        <div class="filtro-row">
+          <select id="rel-categoria">
+            <option value="">Todas categorias</option>
+          </select>
+          <select id="rel-pagamento">
+            <option value="">Todas formas</option>
+            <option value="pix">Pix</option>
+            <option value="dinheiro">Dinheiro</option>
+            <option value="debito">Débito</option>
+            <option value="credito">Crédito</option>
+          </select>
+        </div>
+        <div class="filtro-row">
+          <input type="text" id="rel-produto" placeholder="Nome do produto..." />
+          <input type="text" id="rel-cliente" placeholder="Nome do cliente..." />
+        </div>
+        <div class="filtro-row">
+          <button id="btn-gerar-relatorio" class="btn-primary">Gerar relatório</button>
+        </div>
+      </div>
+
+      <div id="rel-resumo" class="rel-resumo hidden">
+        <div class="rel-card">
+          <span>Total Vendido</span>
+          <strong id="rel-total-vendido">R$ 0,00</strong>
+        </div>
+        <div class="rel-card">
+          <span>Custo dos Produtos</span>
+          <strong id="rel-custo">R$ 0,00</strong>
+        </div>
+        <div class="rel-card">
+          <span>Gastos no Período</span>
+          <strong id="rel-gastos-periodo">R$ 0,00</strong>
+        </div>
+        <div class="rel-card destaque">
+          <span>Lucro Estimado</span>
+          <strong id="rel-lucro">R$ 0,00</strong>
+        </div>
+      </div>
+
+      <div id="rel-por-pagamento" class="rel-section hidden">
+        <h3 class="section-title">Por Forma de Pagamento</h3>
+        <div id="rel-pagamento-lista"></div>
+      </div>
+
+      <div id="rel-por-produto" class="rel-section hidden">
+        <h3 class="section-title">Por Produto</h3>
+        <div id="rel-produto-lista"></div>
+      </div>
+
+      <div id="rel-vendas-detalhadas" class="rel-section hidden">
+        <h3 class="section-title">Vendas do Período</h3>
+        <div id="rel-vendas-lista"></div>
+      </div>
+
+      <div id="rel-exportar" class="rel-exportar hidden">
+        <button id="btn-export-pdf" class="btn-secondary">📄 PDF</button>
+        <button id="btn-export-excel" class="btn-secondary">📊 Excel</button>
+      </div>
+    </section>
+
+  </main><!-- /main-content -->
+
+  <!-- ═══════════ MENU INFERIOR ═══════════ -->
+  <nav class="bottom-nav">
+    <button class="nav-btn active" data-tab="dashboard">
+      <span>📊</span><small>Dashboard</small>
+    </button>
+    <button class="nav-btn" data-tab="vendas">
+      <span>🛒</span><small>Vendas</small>
+    </button>
+    <button class="nav-btn" data-tab="produtos">
+      <span>📦</span><small>Produtos</small>
+    </button>
+    <button class="nav-btn" data-tab="gastos">
+      <span>📥</span><small>Mercadoria</small>
+    </button>
+    <button class="nav-btn" data-tab="relatorios">
+      <span>📈</span><small>Relatórios</small>
+    </button>
+  </nav>
+
+</div><!-- /app -->
+
+<!-- ═══════════════════════════════════════
+     MODAIS
+═══════════════════════════════════════ -->
+
+<!-- Modal Produto -->
+<div id="modal-produto" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3 id="modal-produto-titulo">Novo Produto</h3>
+      <button class="btn-close" data-close="modal-produto">✕</button>
+    </div>
+    <form id="form-produto">
+      <input type="hidden" id="prod-id" />
+      <label>Nome do produto</label>
+      <input type="text" id="prod-nome" required />
+      <label>Categoria</label>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="prod-categoria" required style="flex:1"></select>
+        <button type="button" id="btn-nova-categoria-prod" class="btn-secondary btn-sm" title="Nova categoria" style="flex-shrink:0;padding:9px 12px">＋</button>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Preço de venda (R$)</label>
+          <input type="number" id="prod-preco-venda" step="0.01" min="0" required />
+        </div>
+        <div>
+          <label>Preço de custo (R$)</label>
+          <input type="number" id="prod-preco-custo" step="0.01" min="0" required />
+        </div>
+      </div>
+      <div class="form-row">
+        <div>
+          <label>Estoque atual</label>
+          <input type="number" id="prod-estoque" min="0" required />
+        </div>
+        <div>
+          <label>Estoque mínimo</label>
+          <input type="number" id="prod-estoque-min" min="0" required />
+        </div>
+      </div>
+      <label>Status</label>
+      <select id="prod-status">
+        <option value="ativo">Ativo</option>
+        <option value="inativo">Inativo</option>
+      </select>
+
+      <!-- Upload de imagens -->
+      <label style="margin-top:14px">Fotos do produto</label>
+      <div class="upload-area" id="upload-area">
+        <input type="file" id="prod-fotos" accept="image/*" multiple hidden />
+        <div class="upload-placeholder" id="upload-placeholder">
+          <span class="upload-icon">📷</span>
+          <span class="upload-txt">Clique para adicionar fotos</span>
+          <span class="upload-sub">JPG, PNG ou WEBP · máx. 5 MB cada</span>
+        </div>
+        <div class="upload-previews" id="upload-previews"></div>
+      </div>
+
+      <button type="submit" class="btn-primary" style="margin-top:16px">Salvar</button>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Ajuste de Estoque -->
+<div id="modal-estoque" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>Ajuste de Estoque</h3>
+      <button class="btn-close" data-close="modal-estoque">✕</button>
+    </div>
+    <form id="form-estoque">
+      <input type="hidden" id="estoque-produto-id" />
+      <p id="estoque-produto-nome" class="produto-nome-modal"></p>
+      <label>Tipo</label>
+      <select id="estoque-tipo">
+        <option value="entrada">Entrada (+)</option>
+        <option value="saida">Saída (−)</option>
+      </select>
+      <label>Quantidade</label>
+      <input type="number" id="estoque-quantidade" min="1" required />
+      <label>Motivo</label>
+      <input type="text" id="estoque-motivo" placeholder="Ex: Compra de fornecedor" />
+      <button type="submit" class="btn-primary" style="margin-top:16px">Confirmar</button>
+    </form>
+  </div>
+</div>
+
+<!-- Modal Detalhes da Venda -->
+<div id="modal-venda-detalhe" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-header">
+      <h3>Detalhes da Venda</h3>
+      <button class="btn-close" data-close="modal-venda-detalhe">✕</button>
+    </div>
+    <div id="venda-detalhe-conteudo"></div>
+  </div>
+</div>
+
+<!-- Modal Montar Combo -->
+<div id="modal-montar-combo" class="modal hidden">
+  <div class="modal-box modal-combo">
+
+    <!-- Cabeçalho: foto + nome + preço do combo -->
+    <div class="combo-modal-header">
+      <button type="button" class="btn-close combo-modal-fechar" data-close="modal-montar-combo">✕</button>
+      <div class="combo-modal-info">
+        <div class="combo-modal-img" id="montar-combo-img">
+          <span style="font-size:32px">🎁</span>
+        </div>
+        <div>
+          <div class="combo-modal-nome" id="montar-combo-titulo">Montar combo</div>
+          <div class="combo-modal-preco" id="montar-combo-preco">R$ 0,00</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grupos de escolha -->
+    <div id="montar-combo-grupos" class="combo-grupos-scroll"></div>
+
+    <!-- Rodapé: cancelar + adicionar -->
+    <div class="combo-modal-rodape">
+      <button type="button" class="combo-btn-cancelar" data-close="modal-montar-combo">Cancelar</button>
+      <button type="button" id="btn-confirmar-combo" class="combo-btn-adicionar" disabled>
+        <span class="combo-btn-icone">🛒</span>
+        <span id="montar-combo-ajuda">0/4 itens</span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- Modal Combo Personalizado -->
+<div id="modal-combo-custom" class="modal hidden">
+  <div class="modal-box modal-combo">
+
+    <!-- Cabeçalho -->
+    <div class="combo-modal-header">
+      <button type="button" class="btn-close combo-modal-fechar" data-close="modal-combo-custom">✕</button>
+      <div class="combo-modal-info">
+        <div class="combo-modal-img">
+          <span style="font-size:32px">🎯</span>
+        </div>
+        <div>
+          <div class="combo-modal-nome">MONTE SEU COMBO</div>
+          <div class="combo-modal-preco" id="combo-custom-preco-total">R$ 0,00</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Grupos dinâmicos (Copão, Energético, Gelo, Tamanho) -->
+    <div id="combo-custom-grupos" class="combo-grupos-scroll"></div>
+
+    <!-- Rodapé -->
+    <div class="combo-modal-rodape">
+      <button type="button" class="combo-btn-cancelar" data-close="modal-combo-custom">Cancelar</button>
+      <button type="button" id="btn-confirmar-combo-custom" class="combo-btn-adicionar" disabled>
+        <span class="combo-btn-icone">🛒</span>
+        <span id="combo-custom-ajuda">Selecione os itens</span>
+      </button>
+    </div>
+
+  </div>
+</div>
+
+<!-- Modal Nova Categoria -->
+<div id="modal-categoria" class="modal hidden">
+  <div class="modal-box" style="max-width:380px">
+    <div class="modal-header">
+      <h3 id="modal-categoria-titulo">Nova Categoria</h3>
+      <button class="btn-close" data-close="modal-categoria">✕</button>
+    </div>
+    <form id="form-categoria">
+      <input type="hidden" id="cat-id" />
+      <label>Nome da categoria</label>
+      <input type="text" id="cat-nome" placeholder="Ex: Petiscos" required autocomplete="off" />
+      <label>Emoji (opcional)</label>
+      <input type="text" id="cat-emoji" placeholder="Ex: 🍟" maxlength="4" style="font-size:22px;text-align:center" />
+      <button type="submit" class="btn-primary" style="margin-top:16px">Salvar categoria</button>
+    </form>
+    <div style="margin-top:16px">
+      <p class="section-title" style="margin-bottom:8px">Categorias cadastradas</p>
+      <div id="lista-categorias-modal"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast hidden"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
