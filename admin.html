@@ -109,6 +109,91 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <!-- ═══════════ MODAL EDITAR PRODUTO ═══════════ -->
+  <div id="modal-editar-produto" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-box modal-edit-box">
+      <div class="modal-edit-header">
+        <h3>✏️ Editar produto</h3>
+        <button type="button" class="modal-edit-close" data-close="modal-editar-produto" aria-label="Fechar">✕</button>
+      </div>
+      <form id="form-editar-produto" class="modal-edit-form">
+        <input type="hidden" id="edit-id" />
+
+        <div class="edit-row">
+          <div class="edit-field edit-field-lg">
+            <label>Nome do produto <span class="req">*</span></label>
+            <input type="text" id="edit-nome" required />
+          </div>
+          <div class="edit-field">
+            <label>Categoria <span class="req">*</span></label>
+            <select id="edit-categoria" required></select>
+          </div>
+        </div>
+
+        <div class="edit-row">
+          <div class="edit-field">
+            <label>Preço de venda (R$) <span class="req">*</span></label>
+            <input type="number" id="edit-preco-venda" step="0.01" min="0" required />
+          </div>
+          <div class="edit-field">
+            <label>Preço de custo (R$)</label>
+            <input type="number" id="edit-preco-custo" step="0.01" min="0" />
+          </div>
+        </div>
+
+        <div class="edit-row">
+          <div class="edit-field">
+            <label>Estoque atual</label>
+            <input type="number" id="edit-estoque" min="0" />
+          </div>
+          <div class="edit-field">
+            <label>Estoque mínimo</label>
+            <input type="number" id="edit-estoque-min" min="0" />
+          </div>
+          <div class="edit-field">
+            <label>Status</label>
+            <select id="edit-status">
+              <option value="ativo">Ativo</option>
+              <option value="inativo">Inativo</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="edit-divider">Configurações do cardápio público</div>
+
+        <div class="edit-row">
+          <div class="edit-field edit-field-lg">
+            <label>Descrição curta (aparece no cardápio)</label>
+            <input type="text" id="edit-descricao" placeholder="Ex: Gin premium com tônica" />
+          </div>
+          <div class="edit-field">
+            <label>Tamanho</label>
+            <input type="text" id="edit-tamanho" placeholder="Ex: 700ml" />
+          </div>
+        </div>
+
+        <div class="edit-visivel-row">
+          <label class="edit-visivel-label">
+            <input type="checkbox" id="edit-visivel" />
+            <span>Visível no cardápio público</span>
+          </label>
+          <span class="edit-visivel-hint">Quando ligado, o produto aparece no site de pedidos.</span>
+        </div>
+
+        <div id="edit-foto-preview" class="edit-foto-preview"></div>
+
+        <div class="edit-actions">
+          <button type="button" class="btn-ghost" data-close="modal-editar-produto"
+            style="width:auto;padding:10px 20px">Cancelar</button>
+          <button type="submit" class="btn-primary" style="width:auto;padding:10px 24px">
+            Salvar alterações
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
 </div>
 <script src="admin.js"></script>
 </body>
