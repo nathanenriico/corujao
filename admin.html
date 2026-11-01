@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adega Corujão — Painel do Cardápio</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="admin.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+<div class="app" style="max-width:960px;padding-bottom:40px">
+
+  <!-- ═══════════ LOGIN ═══════════ -->
+  <div id="login-box" class="login-box">
+    <div class="login-card">
+      <span class="brand-logo" style="font-size:40px">🦉</span>
+      <h1>Painel do Cardápio</h1>
+      <p class="login-sub">Entre com o mesmo login do sistema da adega.</p>
+      <form id="form-login">
+        <label>E-mail</label>
+        <input type="email" id="login-email" required autocomplete="email" />
+        <label>Senha</label>
+        <input type="password" id="login-senha" required autocomplete="current-password" />
+        <button type="submit" class="btn-primary btn-large">Entrar</button>
+        <p class="login-erro" id="login-erro" hidden></p>
+      </form>
+    </div>
+  </div>
+
+  <!-- ═══════════ PAINEL ═══════════ -->
+  <div id="painel" class="painel hidden">
+    <header class="header" style="position:static">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-logo">🦉</span>
+          <div class="brand-text">
+            <span class="brand-name">Painel do Cardápio</span>
+            <span class="brand-tag">Adega Corujão</span>
+          </div>
+        </div>
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+          <a href="index.html" class="btn-ghost" style="width:auto;padding:8px 14px">Ver cardápio</a>
+          <button type="button" class="btn-ghost" id="btn-logout" style="width:auto;padding:8px 14px">Sair</button>
+        </div>
+      </div>
+    </header>
+
+    <nav class="category-bar" id="admin-tabs" style="margin-top:16px">
+      <button class="chip active" data-atab="produtos">Produtos</button>
+      <button class="chip" data-atab="loja">Loja</button>
+      <button class="chip" data-atab="copao">Copão</button>
+    </nav>
+
+    <!-- ── ABA PRODUTOS ── -->
+    <section id="atab-produtos" class="atab">
+      <p class="admin-hint">Ligue <strong>Visível no cardápio</strong> para os produtos que aparecem no site público. Edite a descrição curta e o tamanho exibidos.</p>
+      <div class="filtros-produtos" style="margin:12px 0">
+        <input type="text" id="admin-busca" placeholder="🔍 Buscar produto..." />
+        <select id="admin-filtro-cat"><option value="">Todas categorias</option></select>
+      </div>
+      <div id="admin-produtos-lista" class="admin-produtos-lista"></div>
+    </section>
+
+    <!-- ── ABA LOJA ── -->
+    <section id="atab-loja" class="atab hidden">
+      <p class="admin-hint">Estas informações aparecem no cardápio público e no pedido do WhatsApp.</p>
+      <form id="form-loja" class="admin-form">
+        <label>Nome da loja</label>
+        <input type="text" data-cfg="nome_loja" placeholder="Adega Corujão" />
+        <label>Frase de identidade</label>
+        <input type="text" data-cfg="frase_identidade" placeholder="A noite tem dono" />
+        <label>WhatsApp do pedido <span style="color:var(--red)">(obrigatório para receber pedidos)</span></label>
+        <input type="text" data-cfg="whatsapp" placeholder="Ex: 11999998888 (somente números, com DDD)" />
+        <label>Endereço</label>
+        <input type="text" data-cfg="endereco" />
+        <label>Horário de funcionamento</label>
+        <input type="text" data-cfg="horario" />
+        <label>Retirada / Entrega</label>
+        <input type="text" data-cfg="retirada" />
+        <label>Aviso no cardápio (opcional — ex.: "cardápio sujeito a alteração")</label>
+        <input type="text" data-cfg="aviso_cardapio" />
+        <button type="submit" class="btn-primary btn-large">Salvar dados da loja</button>
+      </form>
+    </section>
+
+    <!-- ── ABA COPÃO ── -->
+    <section id="atab-copao" class="atab hidden">
+      <h2 class="admin-section-title">Tamanhos de copo</h2>
+      <p class="admin-hint">Usados no "Monte seu Copão". Defina o rótulo e um preço extra opcional.</p>
+      <div id="tamanhos-lista" class="admin-sub-lista"></div>
+      <form id="form-tamanho" class="admin-form-inline">
+        <input type="text" id="tam-label" placeholder="Rótulo (ex: 500 ml)" required />
+        <input type="number" id="tam-extra" placeholder="Extra R$" step="0.01" min="0" value="0" />
+        <button type="submit" class="btn-primary">+ Adicionar</button>
+      </form>
+
+      <h2 class="admin-section-title" style="margin-top:28px">Sabores de copão</h2>
+      <p class="admin-hint">Sabores que o cliente pode escolher ao pedir um copão. Deixe a categoria em branco para aplicar a todos.</p>
+      <div id="sabores-lista" class="admin-sub-lista"></div>
+      <form id="form-sabor" class="admin-form-inline">
+        <input type="text" id="sab-nome" placeholder="Sabor (ex: Limão)" required />
+        <select id="sab-cat"><option value="">Todos os copões</option></select>
+        <input type="number" id="sab-extra" placeholder="Extra R$" step="0.01" min="0" value="0" />
+        <button type="submit" class="btn-primary">+ Adicionar</button>
+      </form>
+    </section>
+
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+</div>
+<script src="admin.js"></script>
+</body>
+</html>
