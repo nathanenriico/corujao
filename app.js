@@ -310,9 +310,9 @@ function buildSection(cat, itens) {
 
   // subtítulos editoriais por categoria
   const SUBS = {
-    'Copões de Gin e Vodka': 'Sabores que marcam momentos',
-    'Copões de Whisky':      'Bebe · Vive · Repete',
-    'Copões Gourmet':        'Aqui cada gole conta uma história',
+    'Copões de Gin e Vodka': 'Sabores que marcam momentos · 700ml',
+    'Copões de Whisky':      'Bebe · Vive · Repete · 700ml',
+    'Copões Gourmet':        'Aqui cada gole conta uma história · 700ml',
     'Copões':                '700ml de puro respeito',
     'Combos':                'Mais que bebida, é liberdade',
     'Cervejas':              'Gelada na hora certa',
@@ -324,8 +324,8 @@ function buildSection(cat, itens) {
   };
   const sub = SUBS[cat] || '';
 
-  // badge de volume para copões
-  const showBadge = cat.toLowerCase().includes('cop') || cat.toLowerCase().includes('gourmet');
+  // badge de volume para todas as categorias de copão
+  const showBadge = ['Copões de Gin e Vodka','Copões de Whisky','Copões Gourmet','Copões','Gourmet'].includes(cat);
 
   const header = `
   <div class="cat-header" style="--cat-gradient:${grad}">
