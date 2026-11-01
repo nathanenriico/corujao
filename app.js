@@ -9,9 +9,15 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const REST     = SUPABASE_URL + '/rest/v1/';
 const REST_HDR = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
 
+// Colunas necessárias — não busca created_at nem campos internos
+const PROD_COLS = 'id,nome,categoria,preco_venda,estoque,status,foto_url,fotos_urls,descricao_publica,tamanho,combo_config,visivel_publico';
+
 async function apiGet(table, query) {
   const res = await fetch(REST + table + (query ? '?' + query : ''), {
-    headers: REST_HDR, cache: 'no-store',
+    headers: REST_HDR,
+    // 'default' usa cache do browser + ETag; se o servidor retornar 304
+    // o browser entrega a resposta em cache instantaneamente
+    cache: 'default',
   });
   if (!res.ok) throw new Error(table + ' HTTP ' + res.status);
   return res.json();
@@ -83,8 +89,34 @@ function showToast(msg, tipo = '') {
 // ============================================================
 // CARREGAR DADOS
 // ============================================================
+// ============================================================
+// CACHE LOCAL (localStorage)
+// ============================================================
+const CACHE_KEY = 'corujao_v1';
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+
+function salvarCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data }));
+  } catch (_) { /* quota cheia — ignora */ }
+}
+
+function lerCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const { ts, data } = JSON.parse(raw);
+    if (Date.now() - ts > CACHE_TTL) return null; // expirado
+    return data;
+  } catch (_) { return null; }
+}
+
+// ============================================================
+// CARREGAR DADOS
+// ============================================================
 let primeiraCarga = true;
 let dataSig       = '';
+let carregando    = false; // evita fetch duplo
 
 function signature() {
   return allProducts.map(x =>
@@ -106,47 +138,75 @@ function refreshCartPrices() {
   });
 }
 
+function aplicarDados(dados) {
+  categories    = dados.cats  || [];
+  allProducts   = dados.prods || [];
+  publicProducts = allProducts.filter(p => p.visivel_publico);
+  copaoTamanhos = dados.tams  || [];
+  copaoSabores  = dados.sab   || [];
+  lojaConfig    = Object.fromEntries((dados.cfg || []).map(r => [r.chave, r.valor]));
+}
+
+function renderizarTudo() {
+  refreshCartPrices();
+  renderCart();
+
+  if (!publicProducts.length) {
+    showEstado(true, 'empty');
+    renderChips();
+    renderLojaInfo();
+    return;
+  }
+
+  const sig = signature();
+  if (sig === dataSig) return; // nada mudou — não re-renderiza
+  dataSig = sig;
+
+  showEstado(false);
+  applyIdentity();
+  renderChips();
+  renderCardapio();
+  renderLojaInfo();
+}
+
 async function loadAll() {
-  if (primeiraCarga) showEstado(true, 'loading');
+  if (carregando) return;
+  carregando = true;
+
+  // ── 1. Renderiza do cache imediatamente (sem esperar a rede) ──
+  if (primeiraCarga) {
+    const cache = lerCache();
+    if (cache) {
+      aplicarDados(cache);
+      primeiraCarga = false;
+      renderizarTudo(); // aparece instantaneamente
+    } else {
+      showEstado(true, 'loading'); // só mostra loading na 1ª visita sem cache
+    }
+  }
+
+  // ── 2. Busca dados frescos da rede em background ──
   try {
     const [cats, prods, tams, sab, cfg] = await Promise.all([
-      apiGet('categorias', 'select=*&ativo=eq.true&order=ordem.asc,nome.asc'),
-      apiGet('menu_publico', 'select=*&order=nome.asc'),
-      apiGet('copao_tamanhos', 'select=*&ativo=eq.true&order=ordem.asc'),
-      apiGet('copao_sabores',  'select=*&ativo=eq.true&order=ordem.asc'),
+      apiGet('categorias', 'select=id,nome,emoji,ordem,ativo&ativo=eq.true&order=ordem.asc,nome.asc'),
+      apiGet('menu_publico', `select=${PROD_COLS}&order=nome.asc`),
+      apiGet('copao_tamanhos', 'select=id,label,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
+      apiGet('copao_sabores',  'select=id,nome,categoria_copao,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
       apiGet('loja_config',    'select=chave,valor'),
     ]);
-    categories    = cats  || [];
-    allProducts   = prods || [];
-    publicProducts = allProducts.filter(p => p.visivel_publico);
-    copaoTamanhos = tams  || [];
-    copaoSabores  = sab   || [];
-    lojaConfig    = Object.fromEntries((cfg || []).map(r => [r.chave, r.valor]));
+
+    const dados = { cats, prods, tams, sab, cfg };
+    aplicarDados(dados);
+    salvarCache(dados); // persiste para a próxima visita
     primeiraCarga = false;
-
-    refreshCartPrices();
-    renderCart();
-
-    if (!publicProducts.length) {
-      showEstado(true, 'empty');
-      renderChips();
-      renderLojaInfo();
-      return;
-    }
-
-    const sig = signature();
-    if (sig === dataSig) return;
-    dataSig = sig;
-
-    showEstado(false);
-    applyIdentity();
-    renderChips();
-    renderCardapio();
-    renderLojaInfo();
+    renderizarTudo();
   } catch (err) {
     console.error('Erro ao carregar:', err);
     primeiraCarga = false;
-    showEstado(true, 'error');
+    // só mostra erro se não tinha cache
+    if (!publicProducts.length) showEstado(true, 'error');
+  } finally {
+    carregando = false;
   }
 }
 
@@ -214,7 +274,6 @@ function renderCardapio() {
   const cont = document.getElementById('cardapio-container');
   if (!cont) return;
 
-  // filtra por busca
   let lista = publicProducts.slice();
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -224,66 +283,71 @@ function renderCardapio() {
       (p.categoria || '').toLowerCase().includes(q)
     );
   }
-
-  // filtra por categoria selecionada
   if (selectedCategory) {
     lista = lista.filter(p => p.categoria === selectedCategory);
   }
 
   if (!lista.length) {
     cont.innerHTML = `<div class="estado-cardapio"><div class="estado-box"><div class="estado-emoji">🔍</div><div class="estado-titulo">Nenhum resultado</div><div class="estado-texto">Tente outro nome ou categoria.</div></div></div>`;
+    cont.hidden = false;
     return;
   }
 
-  // agrupa por categoria (ordem definida pelas categorias cadastradas)
   const catOrder = categories.map(c => c.nome);
   const grupos   = new Map();
-
   lista.forEach(p => {
     const cat = p.categoria || 'Outros';
     if (!grupos.has(cat)) grupos.set(cat, []);
     grupos.get(cat).push(p);
   });
 
-  // ordena grupos pela ordem das categorias cadastradas
   const gruposOrdenados = [...grupos.entries()].sort(([a], [b]) => {
-    const ia = catOrder.indexOf(a);
-    const ib = catOrder.indexOf(b);
+    const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b);
     return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
   });
 
-  // determina se o banner de copão deve aparecer
-  const temCopao  = allProducts.some(p => isCopao(p) && p.estoque > 0);
-  const temTam    = copaoTamanhos.length > 0;
-  const showBanner = temCopao && temTam && !selectedCategory;
+  const temCopao   = allProducts.some(p => isCopao(p) && p.estoque > 0);
+  const showBanner = temCopao && copaoTamanhos.length > 0 && !selectedCategory;
 
-  let html = '';
-  if (showBanner) html += buildCopаoBanner();
+  // Limpa e coloca o banner primeiro (é pequeno, aparece rápido)
+  cont.innerHTML = '';
+  cont.hidden = false;
+  if (showBanner) {
+    const bannerEl = document.createElement('div');
+    bannerEl.innerHTML = buildCopаoBanner();
+    const b = bannerEl.firstElementChild;
+    cont.appendChild(b);
+    b.querySelectorAll('[data-copao-banner]').forEach(btn =>
+      btn.addEventListener('click', openCustomCopao)
+    );
+  }
 
-  gruposOrdenados.forEach(([cat, itens]) => {
-    // combos primeiro, depois por nome
+  // Renderiza cada categoria numa animationFrame separado
+  // → o browser pinta o banner imediatamente, depois adiciona
+  //   uma categoria por frame sem travar o scroll/toque
+  let i = 0;
+  function renderProximo() {
+    if (i >= gruposOrdenados.length) return;
+    const [cat, itens] = gruposOrdenados[i++];
     itens.sort((a, b) =>
       (isCombo(b) ? 1 : 0) - (isCombo(a) ? 1 : 0) ||
       (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
     );
-    html += buildSection(cat, itens);
-  });
+    const secEl = document.createElement('section');
+    secEl.className = 'cat-section';
+    secEl.id = 'sec-' + cat.replace(/\s+/g, '-').toLowerCase();
+    secEl.dataset.cat = cat;
+    secEl.innerHTML = buildSectionInner(cat, itens);
+    cont.appendChild(secEl);
 
-  cont.innerHTML = html;
-  cont.hidden = false;
+    // eventos dos botões desta seção
+    secEl.querySelectorAll('[data-open]').forEach(btn =>
+      btn.addEventListener('click', () => { const p = byId(btn.dataset.open); if (p) openProduct(p); })
+    );
 
-  // Eventos nos cards
-  cont.querySelectorAll('[data-open]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const p = byId(btn.dataset.open);
-      if (p) openProduct(p);
-    });
-  });
-
-  // Evento no banner de copão
-  cont.querySelectorAll('[data-copao-banner]').forEach(btn =>
-    btn.addEventListener('click', openCustomCopao)
-  );
+    requestAnimationFrame(renderProximo);
+  }
+  requestAnimationFrame(renderProximo);
 }
 
 // ── BUILD: BANNER MONTE SEU COPÃO ────────────────────────
@@ -303,12 +367,10 @@ function buildCopаoBanner() {
 }
 
 // ── BUILD: SEÇÃO DE CATEGORIA ─────────────────────────────
-function buildSection(cat, itens) {
+function buildSectionInner(cat, itens) {
   const grad = CAT_GRADIENTS[cat] || defaultGrad;
   const emoji = catEmoji(cat);
-  const catClean = cat.replace(/\s+/g, '-').toLowerCase();
 
-  // subtítulos editoriais por categoria
   const SUBS = {
     'Copões de Gin e Vodka': 'Sabores que marcam momentos · 700ml',
     'Copões de Whisky':      'Bebe · Vive · Repete · 700ml',
@@ -323,8 +385,6 @@ function buildSection(cat, itens) {
     'Gourmet':               'Experiência premium',
   };
   const sub = SUBS[cat] || '';
-
-  // badge de volume para todas as categorias de copão
   const showBadge = ['Copões de Gin e Vodka','Copões de Whisky','Copões Gourmet','Copões','Gourmet'].includes(cat);
 
   const header = `
@@ -343,7 +403,6 @@ function buildSection(cat, itens) {
 
   const cards = itens.map((p, i) => buildCard(p, i + 1)).join('');
 
-  // adicional de energético para seções de copão
   let adicional = '';
   if (cat.toLowerCase().includes('cop') || cat.toLowerCase().includes('gourmet')) {
     const energeticos = allProducts.filter(x => x.categoria === 'Energéticos' && x.estoque > 0);
@@ -357,12 +416,7 @@ function buildSection(cat, itens) {
     }
   }
 
-  return `
-  <section class="cat-section" id="sec-${esc(catClean)}" data-cat="${esc(cat)}">
-    ${header}
-    <div class="cat-items">${cards}</div>
-    ${adicional}
-  </section>`;
+  return `${header}<div class="cat-items">${cards}</div>${adicional}`;
 }
 
 // ── BUILD: CARD DE PRODUTO ────────────────────────────────
@@ -1123,7 +1177,13 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('drawer-overlay')?.addEventListener('click', closeDrawer);
 
   loadAll();
-  setInterval(() => { if (!document.hidden) loadAll(); }, 60000);
+
+  // Atualiza quando o usuário volta à aba ou ao navegador
+  // (muito melhor que setInterval — só roda quando realmente precisa)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadAll();
+  });
+  window.addEventListener('focus', loadAll);
 });
 
 function setupSearch() {
