@@ -9,23 +9,33 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const REST     = SUPABASE_URL + '/rest/v1/';
 const REST_HDR = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY };
 
-// Colunas necessárias — não busca created_at nem campos internos
+// Colunas necessárias — sem created_at nem campos internos
 const PROD_COLS = 'id,nome,categoria,preco_venda,estoque,status,foto_url,fotos_urls,descricao_publica,tamanho,combo_config,visivel_publico';
 
 async function apiGet(table, query) {
   const res = await fetch(REST + table + (query ? '?' + query : ''), {
     headers: REST_HDR,
-    // 'default' usa cache do browser + ETag; se o servidor retornar 304
-    // o browser entrega a resposta em cache instantaneamente
-    cache: 'default',
+    cache: 'default', // ETag do browser — 304 = instantâneo
   });
   if (!res.ok) throw new Error(table + ' HTTP ' + res.status);
   return res.json();
 }
 
+// RPC única: retorna as 5 tabelas em 1 round-trip (requer migracao_rpc.sql)
+async function apiRPC() {
+  const res = await fetch(SUPABASE_URL + '/rest/v1/rpc/get_cardapio_publico', {
+    method: 'POST',
+    headers: { ...REST_HDR, 'Content-Type': 'application/json' },
+    body: '{}',
+    cache: 'default',
+  });
+  if (!res.ok) throw new Error('rpc HTTP ' + res.status);
+  return res.json();
+}
+
 // ── ESTADO ────────────────────────────────────────────────
-let allProducts    = [];   // todos os ativos (menu_publico) — inclui componentes
-let publicProducts = [];   // visivel_publico = true → vão ao cardápio
+let allProducts    = [];
+let publicProducts = [];
 let categories     = [];
 let copaoTamanhos  = [];
 let copaoSabores   = [];
@@ -34,6 +44,17 @@ let cart           = [];
 
 let selectedCategory = '';
 let searchQuery      = '';
+
+// Índice de busca pré-computado: evita toLowerCase() em cada tecla
+// Recalculado uma vez em aplicarDados(), não a cada busca
+let _searchIndex = []; // [{id, txt}] onde txt = nome+desc+cat já em minúsculas
+
+function recalcSearchIndex() {
+  _searchIndex = publicProducts.map(p => ({
+    id:  p.id,
+    txt: ((p.nome || '') + ' ' + (p.descricao_publica || '') + ' ' + (p.categoria || '')).toLowerCase(),
+  }));
+}
 
 // ── UTIL ──────────────────────────────────────────────────
 const esc = s => String(s ?? '')
@@ -145,6 +166,7 @@ function aplicarDados(dados) {
   copaoTamanhos = dados.tams  || [];
   copaoSabores  = dados.sab   || [];
   lojaConfig    = Object.fromEntries((dados.cfg || []).map(r => [r.chave, r.valor]));
+  recalcSearchIndex(); // recalcula uma vez após cada carga
 }
 
 function renderizarTudo() {
@@ -173,38 +195,51 @@ async function loadAll() {
   if (carregando) return;
   carregando = true;
 
-  // ── 1. Renderiza do cache imediatamente (sem esperar a rede) ──
+  // ── 1. Cache localStorage → aparece instantaneamente ──
   if (primeiraCarga) {
     const cache = lerCache();
     if (cache) {
       aplicarDados(cache);
       primeiraCarga = false;
-      renderizarTudo(); // aparece instantaneamente
+      renderizarTudo();
     } else {
-      showEstado(true, 'loading'); // só mostra loading na 1ª visita sem cache
+      showEstado(true, 'loading');
     }
   }
 
-  // ── 2. Busca dados frescos da rede em background ──
+  // ── 2. Rede: tenta RPC única (1 request); fallback para 5 ──
   try {
-    const [cats, prods, tams, sab, cfg] = await Promise.all([
-      apiGet('categorias', 'select=id,nome,emoji,ordem,ativo&ativo=eq.true&order=ordem.asc,nome.asc'),
-      apiGet('menu_publico', `select=${PROD_COLS}&order=nome.asc`),
-      apiGet('copao_tamanhos', 'select=id,label,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
-      apiGet('copao_sabores',  'select=id,nome,categoria_copao,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
-      apiGet('loja_config',    'select=chave,valor'),
-    ]);
+    let dados;
+    try {
+      // RPC retorna { prods, cats, tams, sab, cfg } em 1 round-trip
+      dados = await apiRPC();
+      // normaliza arrays nulos vindos da RPC (jsonb_agg retorna null se vazio)
+      dados.cats  = dados.cats  || [];
+      dados.prods = dados.prods || [];
+      dados.tams  = dados.tams  || [];
+      dados.sab   = dados.sab   || [];
+      dados.cfg   = dados.cfg   || [];
+    } catch (_rpcErr) {
+      // RPC não disponível (migração ainda não rodou) → fallback 5 requests
+      const [cats, prods, tams, sab, cfg] = await Promise.all([
+        apiGet('categorias',     'select=id,nome,emoji,ordem,ativo&ativo=eq.true&order=ordem.asc,nome.asc'),
+        apiGet('menu_publico',   `select=${PROD_COLS}&order=nome.asc`),
+        apiGet('copao_tamanhos', 'select=id,label,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
+        apiGet('copao_sabores',  'select=id,nome,categoria_copao,preco_extra,ordem,ativo&ativo=eq.true&order=ordem.asc'),
+        apiGet('loja_config',    'select=chave,valor'),
+      ]);
+      dados = { cats, prods, tams, sab, cfg };
+    }
 
-    const dados = { cats, prods, tams, sab, cfg };
     aplicarDados(dados);
-    salvarCache(dados); // persiste para a próxima visita
+    salvarCache(dados);
     primeiraCarga = false;
     renderizarTudo();
   } catch (err) {
     console.error('Erro ao carregar:', err);
     primeiraCarga = false;
-    // só mostra erro se não tinha cache
     if (!publicProducts.length) showEstado(true, 'error');
+    else showToast('Sem conexão — exibindo cardápio salvo', '');
   } finally {
     carregando = false;
   }
@@ -230,7 +265,7 @@ function showEstado(show, kind) {
   const b = document.getElementById('estado-box');
   const map = {
     loading: `<div class="spinner"></div><div class="estado-titulo">Carregando…</div><div class="estado-texto">Buscando as bebidas geladinhas 🦉</div>`,
-    error:   `<div class="estado-emoji">📡</div><div class="estado-titulo">Cardápio indisponível</div><div class="estado-texto">Não foi possível carregar o cardápio agora. Verifique sua conexão.</div>`,
+    error:   `<div class="estado-emoji">📡</div><div class="estado-titulo">Sem conexão</div><div class="estado-texto">Conecte à internet para ver o cardápio. Se já acessou antes, recarregue a página.</div>`,
     empty:   `<div class="estado-emoji">🦉</div><div class="estado-titulo">Em breve</div><div class="estado-texto">A adega ainda não liberou os produtos para o cardápio online.</div>`,
   };
   if (b) b.innerHTML = map[kind] || '';
@@ -277,11 +312,9 @@ function renderCardapio() {
   let lista = publicProducts.slice();
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
-    lista = lista.filter(p =>
-      (p.nome || '').toLowerCase().includes(q) ||
-      (p.descricao_publica || '').toLowerCase().includes(q) ||
-      (p.categoria || '').toLowerCase().includes(q)
-    );
+    // usa o índice pré-computado: sem toLowerCase() em cada produto
+    const ids = new Set(_searchIndex.filter(x => x.txt.includes(q)).map(x => x.id));
+    lista = lista.filter(p => ids.has(p.id));
   }
   if (selectedCategory) {
     lista = lista.filter(p => p.categoria === selectedCategory);
@@ -322,9 +355,11 @@ function renderCardapio() {
     );
   }
 
-  // Renderiza cada categoria numa animationFrame separado
-  // → o browser pinta o banner imediatamente, depois adiciona
-  //   uma categoria por frame sem travar o scroll/toque
+  // Renderiza cada categoria por frame; dentro de cada categoria,
+  // os produtos são adicionados em lotes de BATCH_SIZE por frame.
+  // Isso evita travar o browser mesmo com 45 copões numa só seção.
+  const BATCH_SIZE = 8; // cards por frame — calibrado para 60fps
+
   let i = 0;
   function renderProximo() {
     if (i >= gruposOrdenados.length) return;
@@ -333,19 +368,39 @@ function renderCardapio() {
       (isCombo(b) ? 1 : 0) - (isCombo(a) ? 1 : 0) ||
       (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
     );
+
     const secEl = document.createElement('section');
     secEl.className = 'cat-section';
     secEl.id = 'sec-' + cat.replace(/\s+/g, '-').toLowerCase();
     secEl.dataset.cat = cat;
-    secEl.innerHTML = buildSectionInner(cat, itens);
+
+    // Header e container de cards aparecem imediatamente
+    const headerHtml = buildSectionHeader(cat);
+    const adicional  = buildSectionAdicional(cat);
+    secEl.innerHTML  = headerHtml + '<div class="cat-items" data-grid></div>' + adicional;
     cont.appendChild(secEl);
 
-    // eventos dos botões desta seção
-    secEl.querySelectorAll('[data-open]').forEach(btn =>
-      btn.addEventListener('click', () => { const p = byId(btn.dataset.open); if (p) openProduct(p); })
-    );
+    const grid = secEl.querySelector('[data-grid]');
 
-    requestAnimationFrame(renderProximo);
+    // Produtos adicionados em lotes via rAF — não trava o scroll
+    let j = 0;
+    function adicionarLote() {
+      const fim = Math.min(j + BATCH_SIZE, itens.length);
+      for (; j < fim; j++) {
+        const div = document.createElement('div');
+        div.innerHTML = buildCard(itens[j], j + 1);
+        const card = div.firstElementChild;
+        // listener de click direto no card (não recria listeners ao re-render)
+        card.querySelector('[data-open]')?.addEventListener('click', function() {
+          const p = byId(this.dataset.open);
+          if (p) openProduct(p);
+        });
+        grid.appendChild(card);
+      }
+      if (j < itens.length) requestAnimationFrame(adicionarLote);
+      else requestAnimationFrame(renderProximo); // próxima categoria
+    }
+    requestAnimationFrame(adicionarLote);
   }
   requestAnimationFrame(renderProximo);
 }
@@ -366,11 +421,10 @@ function buildCopаoBanner() {
   </div>`;
 }
 
-// ── BUILD: SEÇÃO DE CATEGORIA ─────────────────────────────
-function buildSectionInner(cat, itens) {
+// ── BUILD: SEÇÃO — HEADER ────────────────────────────────
+function buildSectionHeader(cat) {
   const grad = CAT_GRADIENTS[cat] || defaultGrad;
   const emoji = catEmoji(cat);
-
   const SUBS = {
     'Copões de Gin e Vodka': 'Sabores que marcam momentos · 700ml',
     'Copões de Whisky':      'Bebe · Vive · Repete · 700ml',
@@ -386,8 +440,7 @@ function buildSectionInner(cat, itens) {
   };
   const sub = SUBS[cat] || '';
   const showBadge = ['Copões de Gin e Vodka','Copões de Whisky','Copões Gourmet','Copões','Gourmet'].includes(cat);
-
-  const header = `
+  return `
   <div class="cat-header" style="--cat-gradient:${grad}">
     <div class="cat-header-info">
       <div class="cat-eyebrow">${esc(emoji)} Nosso cardápio</div>
@@ -400,23 +453,22 @@ function buildSectionInner(cat, itens) {
       <span class="cat-badge-desc">De puro respeito</span>
     </div>` : ''}
   </div>`;
+}
 
+// ── BUILD: SEÇÃO — ADICIONAL (energético) ────────────────
+function buildSectionAdicional(cat) {
+  if (!cat.toLowerCase().includes('cop') && !cat.toLowerCase().includes('gourmet')) return '';
+  const energeticos = allProducts.filter(x => x.categoria === 'Energéticos' && x.estoque > 0);
+  if (!energeticos.length) return '';
+  const nomes = [...new Set(energeticos.map(e => e.nome.replace(/energético\s*/i,'').trim()))].slice(0,2).join(' ou ');
+  const preco = energeticos[0].preco_venda;
+  return `<div class="cat-adicional">⚡ <span>Adicione <strong>${nomes.length > 2 ? nomes : 'Red Bull ou Monster'}</strong> por apenas <strong>+ ${fmt(preco)}</strong></span></div>`;
+}
+
+// ── BUILD: SEÇÃO COMPLETA (compatibilidade) ───────────────
+function buildSectionInner(cat, itens) {
   const cards = itens.map((p, i) => buildCard(p, i + 1)).join('');
-
-  let adicional = '';
-  if (cat.toLowerCase().includes('cop') || cat.toLowerCase().includes('gourmet')) {
-    const energeticos = allProducts.filter(x => x.categoria === 'Energéticos' && x.estoque > 0);
-    if (energeticos.length) {
-      const nomes = [...new Set(energeticos.map(e => e.nome.replace(/energético\s*/i,'').trim()))].slice(0, 2).join(' ou ');
-      const preco = energeticos[0].preco_venda;
-      adicional = `
-      <div class="cat-adicional">
-        ⚡ <span>Adicione <strong>${nomes.length > 2 ? nomes : 'Red Bull ou Monster'}</strong> por apenas <strong>+ ${fmt(preco)}</strong></span>
-      </div>`;
-    }
-  }
-
-  return `${header}<div class="cat-items">${cards}</div>${adicional}`;
+  return buildSectionHeader(cat) + `<div class="cat-items">${cards}</div>` + buildSectionAdicional(cat);
 }
 
 // ── BUILD: CARD DE PRODUTO ────────────────────────────────
@@ -947,55 +999,71 @@ function compText(item) {
   return parts.join(' · ');
 }
 
+// Chave que representa o estado visual de um item no carrinho
+function cartItemKey(item, i) {
+  return `${i}|${item.nome}|${item.quantidade}|${itemUnit(item)}`;
+}
+
+// Snapshot do estado atual de renderização do carrinho
+// (evita recriar DOM quando nada mudou)
+let _cartSnapshot = '';
+
 function renderCart() {
   const body = document.getElementById('cart-items');
   if (!body) return;
 
-  if (!cart.length) {
-    body.innerHTML = `<div class="cart-empty"><div class="ce-emoji">🛒</div><div>Seu pedido está vazio.</div></div>`;
-  } else {
-    body.innerHTML = cart.map((item, i) => `
-      <div class="cart-item">
-        <div class="cart-item-foto">
-          ${item.foto_url
-            ? `<img src="${esc(item.foto_url)}" alt="" onerror="this.parentElement.innerHTML='<span class=fb>🦉</span>'" />`
-            : `<span class="fb">${item.is_custom_copao?'🎯':catEmoji(item.categoria)}</span>`}
-        </div>
-        <div class="cart-item-info">
-          <div class="cart-item-nome">${esc(item.nome)}${item.tamanho?' · '+esc(item.tamanho):''}</div>
-          ${compText(item)?`<div class="cart-item-comp">${esc(compText(item))}</div>`:''}
-          <div class="cart-item-preco">${fmt(itemUnit(item))} un · ${fmt(itemSub(item))}</div>
-          <div class="cart-item-qty">
-            <button type="button" class="qty-btn" data-ci="${i}" data-step="-1">−</button>
-            <span class="qty-val">${item.quantidade}</span>
-            <button type="button" class="qty-btn" data-ci="${i}" data-step="1">+</button>
-            <button type="button" class="cart-item-remove" data-rm="${i}">Remover</button>
-          </div>
-        </div>
-      </div>`).join('');
+  // ── Diff: só re-renderiza o corpo se algo mudou ──────────
+  const novoSnap = cart.map(cartItemKey).join('||');
+  if (novoSnap !== _cartSnapshot) {
+    _cartSnapshot = novoSnap;
 
-    body.querySelectorAll('[data-ci]').forEach(b =>
-      b.addEventListener('click', () => {
-        const i=parseInt(b.dataset.ci,10), step=parseInt(b.dataset.step,10);
-        cart[i].quantidade = Math.max(1, cart[i].quantidade+step);
-        renderCart();
-      })
-    );
-    body.querySelectorAll('[data-rm]').forEach(b =>
-      b.addEventListener('click', () => { cart.splice(parseInt(b.dataset.rm,10),1); renderCart(); })
-    );
+    if (!cart.length) {
+      body.innerHTML = `<div class="cart-empty"><div class="ce-emoji">🛒</div><div>Seu pedido está vazio.</div></div>`;
+    } else {
+      body.innerHTML = cart.map((item, i) => `
+        <div class="cart-item">
+          <div class="cart-item-foto">
+            ${item.foto_url
+              ? `<img src="${esc(item.foto_url)}" alt="" onerror="this.parentElement.innerHTML='<span class=fb>🦉</span>'" />`
+              : `<span class="fb">${item.is_custom_copao?'🎯':catEmoji(item.categoria)}</span>`}
+          </div>
+          <div class="cart-item-info">
+            <div class="cart-item-nome">${esc(item.nome)}${item.tamanho?' · '+esc(item.tamanho):''}</div>
+            ${compText(item)?`<div class="cart-item-comp">${esc(compText(item))}</div>`:''}
+            <div class="cart-item-preco">${fmt(itemUnit(item))} un · ${fmt(itemSub(item))}</div>
+            <div class="cart-item-qty">
+              <button type="button" class="qty-btn" data-ci="${i}" data-step="-1">−</button>
+              <span class="qty-val">${item.quantidade}</span>
+              <button type="button" class="qty-btn" data-ci="${i}" data-step="1">+</button>
+              <button type="button" class="cart-item-remove" data-rm="${i}">Remover</button>
+            </div>
+          </div>
+        </div>`).join('');
+
+      body.querySelectorAll('[data-ci]').forEach(b =>
+        b.addEventListener('click', () => {
+          const i=parseInt(b.dataset.ci,10), step=parseInt(b.dataset.step,10);
+          cart[i].quantidade = Math.max(1, cart[i].quantidade+step);
+          renderCart();
+        })
+      );
+      body.querySelectorAll('[data-rm]').forEach(b =>
+        b.addEventListener('click', () => { cart.splice(parseInt(b.dataset.rm,10),1); renderCart(); })
+      );
+    }
   }
 
+  // ── Atualiza totais (sempre, são baratos) ────────────────
   const tot = cartTotal();
   const q   = totalItens();
-  const el  = (id,v) => { const e=document.getElementById(id); if(e) e.textContent=v; };
-  el('cart-total', fmt(tot));
-  el('cart-bar-total', fmt(tot));
-  el('cart-badge', q);
+  const el  = (id,v) => { const e=document.getElementById(id); if(e && e.textContent!==v) e.textContent=v; };
+  el('cart-total',    fmt(tot));
+  el('cart-bar-total',fmt(tot));
+  el('cart-badge',    String(q));
   el('cart-bar-text', q===1?'1 item':`${q} itens`);
-  const ce = document.getElementById('cart-enviar'); if(ce) ce.disabled = !cart.length;
-  const cs = document.getElementById('cart-bar-send'); if(cs) cs.disabled = !cart.length;
-  const bar = document.getElementById('cart-bar'); if(bar) bar.classList.toggle('fab-oculto', !cart.length);
+  const ce  = document.getElementById('cart-enviar');   if(ce)  ce.disabled  = !cart.length;
+  const cs  = document.getElementById('cart-bar-send'); if(cs)  cs.disabled  = !cart.length;
+  const bar = document.getElementById('cart-bar');      if(bar) bar.classList.toggle('fab-oculto', !cart.length);
   document.body.style.paddingBottom = cart.length ? '80px' : '0';
 }
 
@@ -1178,12 +1246,19 @@ window.addEventListener('DOMContentLoaded', () => {
 
   loadAll();
 
-  // Atualiza quando o usuário volta à aba ou ao navegador
-  // (muito melhor que setInterval — só roda quando realmente precisa)
+  // Debounce duplo: visibilitychange e focus podem disparar juntos.
+  // _ultimaAtualizacao garante no mínimo 30s entre reloads automáticos.
+  let _ultimaAtualizacao = 0;
+  function atualizarSeNecessario() {
+    const agora = Date.now();
+    if (agora - _ultimaAtualizacao < 30_000) return; // cooldown 30s
+    _ultimaAtualizacao = agora;
+    loadAll();
+  }
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadAll();
+    if (!document.hidden) atualizarSeNecessario();
   });
-  window.addEventListener('focus', loadAll);
+  window.addEventListener('focus', atualizarSeNecessario);
 });
 
 function setupSearch() {
