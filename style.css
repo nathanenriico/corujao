@@ -921,3 +921,59 @@ input, textarea, select { font-family: inherit; }
 @media (min-width: 1440px) {
   .cat-items { grid-template-columns: repeat(5, 1fr); }
 }
+
+/* ── SUBDIVISÕES DE COPÃO ─────────────────────────────── */
+.copao-subsecao {
+  /* separa visualmente cada subgrupo dentro da seção Copões */
+  border-bottom: 1px solid var(--border);
+}
+.copao-sub-header {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  background: var(--card2);
+}
+/* Gradiente de cor do subgrupo como faixa lateral */
+.copao-sub-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: var(--sub-grad, linear-gradient(135deg,rgba(147,51,234,.3) 0%,transparent 60%));
+  z-index: 0;
+  opacity: .7;
+}
+.copao-sub-header > * { position: relative; z-index: 1; }
+.copao-sub-emoji {
+  font-size: 28px;
+  flex-shrink: 0;
+  filter: drop-shadow(0 0 8px rgba(147,51,234,.6));
+}
+.copao-sub-titulo {
+  font-family: var(--fd);
+  font-size: clamp(22px, 5vw, 36px);
+  letter-spacing: .06em;
+  line-height: 1;
+  color: var(--text);
+}
+.copao-sub-desc {
+  font-size: 11px;
+  color: var(--text2);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  margin-top: 3px;
+}
+.copao-sub-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--pale);
+  font-weight: 700;
+  background: rgba(147,51,234,.15);
+  border: 1px solid rgba(147,51,234,.3);
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}

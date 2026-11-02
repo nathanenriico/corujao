@@ -369,6 +369,20 @@ function renderCardapio() {
       (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
     );
 
+    // Categoria "Copões" recebe tratamento especial: subdivisões por bebida
+    if (cat === 'Copões') {
+      renderCopoes(cont, itens);
+      // renderCopoes usa rAF internamente; a próxima categoria
+      // será enfileirada pelo último rAF dentro de renderCopoes.
+      // Como renderCopoes não chama renderProximo, fazemos isso aqui
+      // após 1 frame para não bloquear a thread.
+      requestAnimationFrame(() => {
+        // Aguarda um tick extra para o DOM da última sub-seção estabilizar
+        requestAnimationFrame(renderProximo);
+      });
+      return;
+    }
+
     const secEl = document.createElement('section');
     secEl.className = 'cat-section';
     secEl.id = 'sec-' + cat.replace(/\s+/g, '-').toLowerCase();
@@ -405,7 +419,169 @@ function renderCardapio() {
   requestAnimationFrame(renderProximo);
 }
 
-// ── BUILD: BANNER MONTE SEU COPÃO ────────────────────────
+// ============================================================
+// SUBDIVISÃO DE COPÕES por tipo de bebida
+// Classificação baseada nos nomes reais dos produtos no banco.
+// Funciona independente da migração de categorias SQL.
+// ============================================================
+
+// Mapeamento: palavra-chave no nome → subgrupo
+// Ordem importa: a primeira correspondência vence.
+const COPAO_GRUPOS = [
+  {
+    id:       'gin',
+    label:    'Gin',
+    emoji:    '🍸',
+    sub:      'Sabores que marcam momentos · 700ml',
+    grad:     'linear-gradient(135deg, rgba(219,39,119,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
+    // palavras-chave para identificar gin (case-insensitive)
+    keys:     ['tanqueray','beefeater','bombay','eternit gin','gin rocks','goose','absolut','askov','rocks'],
+  },
+  {
+    id:       'vodka',
+    label:    'Vodka',
+    emoji:    '🧊',
+    sub:      '700ml de puro respeito',
+    grad:     'linear-gradient(135deg, rgba(30,58,138,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
+    // vodka pura sem gin no nome (goose já foi capturado por gin)
+    keys:     ['vodka','absolut vodka','sky','askov'],
+  },
+  {
+    id:       'whisky',
+    label:    'Whisky',
+    emoji:    '🥃',
+    sub:      'Bebe · Vive · Repete · 700ml',
+    grad:     'linear-gradient(135deg, rgba(180,83,9,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
+    keys:     ['jack','jim beam','jum beam','chivas','black label','red label','white horse',
+               'old par','ballant','buchanan','passport','passaport','licor 43','chanceler',
+               'busca brisa','bob pinga'],
+  },
+  {
+    id:       'gourmet',
+    label:    'Gourmet',
+    emoji:    '🍫',
+    sub:      'Aqui cada gole conta uma história · 700ml',
+    grad:     'linear-gradient(135deg, rgba(79,70,229,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
+    keys:     ['ballena','gourmet'],
+  },
+];
+
+// Classifica um produto de copão em seu subgrupo
+function classificarCopao(p) {
+  const nome = (p.nome || '').toLowerCase();
+  for (const g of COPAO_GRUPOS) {
+    if (g.keys.some(k => nome.includes(k))) return g.id;
+  }
+  return 'outros';
+}
+
+// Renderiza a seção "Copões" com subdivisões por tipo de bebida.
+// Recebe o elemento container e a lista de itens já filtrados.
+function renderCopoes(cont, itens) {
+  // Agrupa por subgrupo preservando a ordem de COPAO_GRUPOS
+  const mapa = new Map();
+  COPAO_GRUPOS.forEach(g => mapa.set(g.id, []));
+  mapa.set('outros', []);
+
+  itens.forEach(p => {
+    const gid = classificarCopao(p);
+    mapa.get(gid).push(p);
+  });
+
+  // Remove subgrupos vazios
+  const grupos = [...COPAO_GRUPOS, {
+    id:'outros', label:'Outros', emoji:'🍻',
+    sub:'Demais opções de copões',
+    grad:'linear-gradient(135deg, rgba(147,51,234,.55) 0%, rgba(109,40,217,.3) 60%, transparent 100%)',
+    keys:[],
+  }].filter(g => mapa.get(g.id)?.length > 0);
+
+  // Header da categoria principal "Copões"
+  const secPai = document.createElement('section');
+  secPai.className = 'cat-section';
+  secPai.id = 'sec-copoes';
+  secPai.dataset.cat = 'Copões';
+
+  // Título principal (visual diferenciado — engloba os subgrupos)
+  secPai.innerHTML = `
+    <div class="cat-header" style="--cat-gradient:linear-gradient(135deg,rgba(147,51,234,.55) 0%,rgba(109,40,217,.3) 60%,transparent 100%)">
+      <div class="cat-header-info">
+        <div class="cat-eyebrow">🍻 Nosso cardápio</div>
+        <div class="cat-title">Copões</div>
+        <div class="cat-sub">Escolha o tipo de bebida · 700ml de puro respeito</div>
+      </div>
+      <div class="cat-badge">
+        <span class="cat-badge-vol">700ml</span>
+        <span class="cat-badge-desc">De puro respeito</span>
+      </div>
+    </div>`;
+  cont.appendChild(secPai);
+
+  // Adicional energético (único para toda a seção de copões)
+  const energeticos = allProducts.filter(x => x.categoria === 'Energéticos' && x.estoque > 0);
+  let adicionalHtml = '';
+  if (energeticos.length) {
+    const nomes = [...new Set(energeticos.map(e => e.nome.replace(/energético\s*/i,'').trim()))].slice(0,2).join(' ou ');
+    const preco = energeticos[0].preco_venda;
+    adicionalHtml = `<div class="cat-adicional">⚡ <span>Adicione <strong>${nomes.length>2?nomes:'Red Bull ou Monster'}</strong> por apenas <strong>+ ${fmt(preco)}</strong></span></div>`;
+  }
+
+  const BATCH_SIZE = 8;
+
+  // Renderiza cada subgrupo em sequência via rAF
+  let gi = 0;
+  function renderGrupo() {
+    if (gi >= grupos.length) {
+      // Adiciona o rodapé de energético após o último subgrupo
+      if (adicionalHtml) {
+        const adi = document.createElement('div');
+        adi.innerHTML = adicionalHtml;
+        cont.appendChild(adi.firstElementChild);
+      }
+      return;
+    }
+
+    const g = grupos[gi++];
+    const prods = mapa.get(g.id).sort((a,b) =>
+      (isCombo(b)?1:0)-(isCombo(a)?1:0) ||
+      (a.nome||'').localeCompare(b.nome||'','pt-BR')
+    );
+
+    // Sub-seção: header compacto + grid
+    const subSec = document.createElement('div');
+    subSec.className = 'copao-subsecao';
+    subSec.innerHTML = `
+      <div class="copao-sub-header" style="--sub-grad:${g.grad}">
+        <span class="copao-sub-emoji">${g.emoji}</span>
+        <div>
+          <div class="copao-sub-titulo">${esc(g.label)}</div>
+          ${g.sub ? `<div class="copao-sub-desc">${esc(g.sub)}</div>` : ''}
+        </div>
+        <span class="copao-sub-count">${prods.length} opção${prods.length!==1?'ões':''}</span>
+      </div>
+      <div class="cat-items" data-grid></div>`;
+    cont.appendChild(subSec);
+
+    const grid = subSec.querySelector('[data-grid]');
+    let j = 0;
+    function adicionarLote() {
+      const fim = Math.min(j + BATCH_SIZE, prods.length);
+      for (; j < fim; j++) {
+        const div = document.createElement('div');
+        div.innerHTML = buildCard(prods[j], j + 1);
+        const card = div.firstElementChild;
+        card.querySelector('[data-open]')?.addEventListener('click', function() {
+          const p = byId(this.dataset.open); if (p) openProduct(p);
+        });
+        grid.appendChild(card);
+      }
+      if (j < prods.length) requestAnimationFrame(adicionarLote);
+      else requestAnimationFrame(renderGrupo);
+    }
+    requestAnimationFrame(adicionarLote);
+  }
+  requestAnimationFrame(renderGrupo);
+}
 function buildCopаoBanner() {
   return `
   <div class="copao-banner" data-copao-banner="1" role="button" tabindex="0"
