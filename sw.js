@@ -1,5 +1,5 @@
 // ============================================================
-// SERVICE WORKER v4 — Adega Corujão
+// SERVICE WORKER v6 — Adega Corujão
 // ------------------------------------------------------------
 // Estratégias por tipo de request:
 //
@@ -7,23 +7,29 @@
 //    → Stale-While-Revalidate: serve do cache imediatamente
 //      e atualiza em background. Zero latência nas visitas.
 //
+//  • Imagens do Supabase Storage
+//    → Cache-First com TTL de 7 dias: baixa uma vez, serve
+//      do cache nas próximas visitas. Zero latência após 1ª carga.
+//      Imagens raramente mudam — esse é o maior ganho de velocidade.
+//
 //  • API Supabase (RPC + REST)
-//    → Network-First com timeout 4s e fallback para cache.
+//    → Network-First com timeout 6s e fallback para cache.
 //      Dados frescos quando há rede; dados salvos offline.
-//      Também pré-aquece o cache da RPC no activate.
 //
 //  • Fontes Google
 //    → Cache-First: carregadas uma vez, nunca re-baixadas.
 //
-// O app.js já tem localStorage como cache de dados (5min).
-// O sw.js adiciona uma camada de cache HTTP em cima disso,
-// tratando especialmente os requests de rede do app.js.
 // ============================================================
 
-const V            = 'v4';
+const V            = 'v6';  // bump: invalida caches v5 e anteriores
 const CACHE_STATIC = 'corujao-static-'  + V;
 const CACHE_API    = 'corujao-api-'     + V;
 const CACHE_FONTS  = 'corujao-fonts-'   + V;
+const CACHE_IMGS   = 'corujao-imgs-v1'; // cache de imagens — versionado separado
+                                         // para não invalidar junto com assets
+
+// TTL do cache de imagens: 7 dias em ms
+const IMG_CACHE_TTL = 7 * 24 * 60 * 60 * 1000;
 
 // Assets locais que devem estar no cache desde a instalação
 const STATIC_ASSETS = [
@@ -53,16 +59,15 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     Promise.all([
-      // Limpa caches de versões anteriores
+      // Limpa caches de versões anteriores (mantém CACHE_IMGS — versionado separado)
       caches.keys().then(keys =>
         Promise.all(
           keys
-            .filter(k => ![CACHE_STATIC, CACHE_API, CACHE_FONTS].includes(k))
+            .filter(k => ![CACHE_STATIC, CACHE_API, CACHE_FONTS, CACHE_IMGS].includes(k))
             .map(k => caches.delete(k))
         )
       ),
       // Pré-aquece o cache da RPC logo que o SW ativa
-      // → na 1ª visita o app.js já encontra dados no cache do SW
       caches.open(CACHE_API).then(cache =>
         fetch(RPC_URL, {
           method: 'POST',
@@ -96,6 +101,15 @@ self.addEventListener('fetch', event => {
   if (url.hostname === 'fonts.googleapis.com'
    || url.hostname === 'fonts.gstatic.com') {
     event.respondWith(cacheFirst(request, CACHE_FONTS));
+    return;
+  }
+
+  // ── Imagens do Supabase Storage ──────────────────────────
+  // Cache-First com TTL: baixa uma vez, serve do cache por 7 dias.
+  // Maior ganho de velocidade — imagens são o recurso mais pesado.
+  if (url.hostname.includes('supabase.co')
+   && url.pathname.includes('/storage/v1/object/public/')) {
+    event.respondWith(cacheFirstImgs(request));
     return;
   }
 
@@ -146,7 +160,54 @@ async function staleWhileRevalidate(request) {
   return cached || update || new Response('Offline', { status: 503 });
 }
 
-// Network-First com timeout 4s: tenta rede; se demorar ou falhar,
+// Cache-First com TTL para imagens do Supabase Storage.
+// Na 1ª visita: baixa da rede e armazena com timestamp.
+// Nas visitas seguintes: serve do cache instantaneamente.
+// Após TTL (7 dias): revalida em background sem bloquear o usuário.
+async function cacheFirstImgs(request) {
+  const cache  = await caches.open(CACHE_IMGS);
+  const cached = await cache.match(request);
+
+  if (cached) {
+    // Verifica TTL pelo header x-cached-at que guardamos
+    const cachedAt = cached.headers.get('x-cached-at');
+    const age = cachedAt ? Date.now() - Number(cachedAt) : Infinity;
+
+    if (age < IMG_CACHE_TTL) {
+      // Dentro do TTL: serve do cache imediatamente (zero latência)
+      return cached;
+    }
+
+    // Passou do TTL: revalida em background, serve cache enquanto isso
+    fetch(request)
+      .then(res => {
+        if (res.ok) {
+          const headers = new Headers(res.headers);
+          headers.set('x-cached-at', String(Date.now()));
+          const resComTs = new Response(res.body, { status: res.status, headers });
+          cache.put(request, resComTs);
+        }
+      })
+      .catch(() => {});
+    return cached; // serve o cache sem esperar a revalidação
+  }
+
+  // Não está em cache: busca da rede
+  try {
+    const res = await fetch(request);
+    if (res.ok) {
+      const headers = new Headers(res.headers);
+      headers.set('x-cached-at', String(Date.now()));
+      const resComTs = new Response(res.body, { status: res.status, headers });
+      cache.put(request, resComTs.clone());
+      return resComTs;
+    }
+    return res;
+  } catch {
+    // Sem rede e sem cache: retorna 503
+    return new Response('', { status: 503 });
+  }
+}
 // serve do cache. Ideal para dados que precisam ser frescos mas
 // também devem funcionar offline.
 async function networkFirstAPI(request) {
@@ -161,7 +222,7 @@ async function networkFirstAPI(request) {
 
   try {
     const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 4000); // timeout 4s
+    const tid = setTimeout(() => controller.abort(), 6000); // timeout 6s (era 4s — 3G precisa mais tempo)
 
     const response = await fetch(request, { signal: controller.signal });
     clearTimeout(tid);

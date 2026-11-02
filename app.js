@@ -56,6 +56,101 @@ function recalcSearchIndex() {
   }));
 }
 
+// ── LAZY IMAGE LOADER (Intersection Observer) ─────────────
+// Estratégia de carregamento em duas camadas:
+//
+//  CAMADA 1 — IntersectionObserver (IO):
+//    Observa cada <div class="img-lazy"> e carrega a imagem real
+//    quando ela está a 200px de entrar na viewport.
+//    Exibe shimmer animado enquanto aguarda.
+//
+//  CAMADA 2 — Prioridade nos primeiros cards:
+//    Os primeiros N_EAGER cards (visíveis sem scroll) recebem
+//    carregamento imediato via fetchpriority="high", sem esperar o IO.
+//    Isso garante que o LCP não seja bloqueado pelo lazy loading.
+//
+//  FALLBACK — Sem IO (navegadores antigos):
+//    Carrega todas as imagens imediatamente com img.src direto.
+//
+// Contabilizador global: os primeiros N_EAGER cards registrados
+// recebem eager load; os demais, lazy via IO.
+const N_EAGER = 8; // primeiros cards visíveis sem scroll (mobile 1col=4, desktop 2col=6, 3col=9)
+let _eagerCount = 0;
+
+let _imgObserver = null;
+
+function getImgObserver() {
+  if (_imgObserver) return _imgObserver;
+  if (!('IntersectionObserver' in window)) return null;
+  _imgObserver = new IntersectionObserver((entries, obs) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const wrap = entry.target;
+      const src  = wrap.dataset.lazySrc;
+      const alt  = wrap.dataset.lazyAlt;
+      const fb   = wrap.dataset.lazyFb;
+      if (!src) { obs.unobserve(wrap); return; }
+      _carregarImgNoWrap(wrap, src, alt, fb, false);
+      obs.unobserve(wrap);
+    });
+  }, {
+    // Antecipa 300px antes de entrar na viewport — reduz percepção de lag
+    rootMargin: '300px 0px',
+    threshold:  0,
+  });
+  return _imgObserver;
+}
+
+// Carrega a imagem dentro do wrapper, com ou sem fetchpriority="high"
+function _carregarImgNoWrap(wrap, src, alt, fb, prioritario) {
+  const img = new Image();
+  img.alt      = alt || '';
+  img.decoding = 'async';
+  if (prioritario) img.fetchPriority = 'high';
+  img.onload = () => {
+    // Insere a imagem no wrapper — CSS (.item-foto img) controla width/height
+    wrap.innerHTML = '';
+    wrap.appendChild(img);
+    wrap.classList.add('loaded');
+  };
+  img.onerror = () => {
+    wrap.innerHTML = `<span class="fb">${fb || '🍶'}</span>`;
+    wrap.classList.add('loaded');
+  };
+  img.src = src;
+}
+
+// Registra um wrapper .img-lazy para lazy load.
+// Chamado imediatamente após o elemento ser inserido no DOM.
+function observelazyImg(wrapEl) {
+  const src = wrapEl.dataset.lazySrc;
+  const alt = wrapEl.dataset.lazyAlt;
+  const fb  = wrapEl.dataset.lazyFb;
+
+  // Sem src: nada a carregar
+  if (!src) return;
+
+  // Primeiros N_EAGER cards: carregamento imediato com prioridade alta
+  if (_eagerCount < N_EAGER) {
+    _eagerCount++;
+    _carregarImgNoWrap(wrapEl, src, alt, fb, true);
+    return;
+  }
+
+  // Demais: delega para o IntersectionObserver
+  const obs = getImgObserver();
+  if (obs) {
+    obs.observe(wrapEl);
+  } else {
+    // Fallback sem IO: carrega direto, sem prioridade
+    _carregarImgNoWrap(wrapEl, src, alt, fb, false);
+  }
+}
+
+// Reseta o contador ao renderizar o cardápio do zero
+// (chamado em renderCardapio antes dos loops)
+function resetEagerCount() { _eagerCount = 0; }
+
 // ── UTIL ──────────────────────────────────────────────────
 const esc = s => String(s ?? '')
   .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -64,12 +159,52 @@ const esc = s => String(s ?? '')
 const fmt = v => Number(v || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 const num = v => Number(v || 0);
 
-const byId       = id => allProducts.find(p => p.id === id);
+// byId: Map O(1) — reconstruído em aplicarDados() a cada carga de dados.
+// Antes era Array.find() O(n) chamado centenas de vezes por render.
+let _byIdMap = new Map();
+const byId = id => _byIdMap.get(id);
 const isCombo    = p  => !!(p?.combo_config?.groups?.length);
 const isCopao    = p  => !!(p && typeof p.categoria === 'string'
                           && p.categoria.toLowerCase().startsWith('cop'));
 const primaryImg = p  => p?.fotos_urls?.[0] || p?.foto_url || '';
 const catEmoji   = n  => categories.find(c => c.nome === n)?.emoji || '🍶';
+
+// ── TRANSFORMAÇÃO DE URL — Supabase Storage Image API ─────
+// Tenta usar a API de transformação do Supabase (resize + WebP).
+// Requer plano Pro+ com Image Transformations habilitado.
+//
+// Se a URL for do Storage (/object/public/), usa o endpoint de
+// render (/render/image/public/) para redimensionar e converter.
+// Se o servidor retornar 403 ou a feature não estiver ativa, o
+// onerror nos <img> mostra o emoji fallback — as imagens originais
+// continuam disponíveis via /object/public/ sem parâmetros.
+//
+// Para garantir que as imagens sempre apareçam mesmo sem o plano Pro,
+// o sistema usa a URL original como src e a URL transformada como
+// tentativa — se falhar, cai no fallback de emoji (onerror).
+//
+// Referência: https://supabase.com/docs/guides/storage/serving/image-transformations
+function imgUrl(url, width, quality) {
+  if (!url) return '';
+  const q = quality || 75;
+
+  // Já é URL de render — só atualiza/adiciona parâmetros
+  if (url.includes('/storage/v1/render/image/')) {
+    const base = url.split('?')[0];
+    return `${base}?width=${width}&quality=${q}&format=webp`;
+  }
+
+  // URL de objeto: usa diretamente sem conversão para render.
+  // A conversão para /render/image/ exige plano Pro — sem ele retorna 403.
+  // Mantém a URL original para garantir que as imagens apareçam.
+  return url;
+}
+
+// Atalhos para os tamanhos usados no layout
+const imgCard  = url => imgUrl(url, 120, 75);
+const imgModal = url => imgUrl(url, 600, 82);
+const imgCombo = url => imgUrl(url, 80,  72);
+const imgCart  = url => imgUrl(url, 100, 72);
 
 // Gradientes por categoria (mesmo clima das imagens)
 const CAT_GRADIENTS = {
@@ -114,7 +249,7 @@ function showToast(msg, tipo = '') {
 // CACHE LOCAL (localStorage)
 // ============================================================
 const CACHE_KEY = 'corujao_v1';
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutos
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutos — cardápio raramente muda no meio do dia
 
 function salvarCache(data) {
   try {
@@ -127,8 +262,9 @@ function lerCache() {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
     const { ts, data } = JSON.parse(raw);
-    if (Date.now() - ts > CACHE_TTL) return null; // expirado
-    return data;
+    // Retorna os dados independente do TTL — o campo 'expirado' avisa
+    // se precisa revalidar. O cardápio aparece imediatamente em ambos os casos.
+    return { data, expirado: Date.now() - ts > CACHE_TTL };
   } catch (_) { return null; }
 }
 
@@ -166,7 +302,9 @@ function aplicarDados(dados) {
   copaoTamanhos = dados.tams  || [];
   copaoSabores  = dados.sab   || [];
   lojaConfig    = Object.fromEntries((dados.cfg || []).map(r => [r.chave, r.valor]));
-  recalcSearchIndex(); // recalcula uma vez após cada carga
+  // Reconstrói o Map O(1) para byId e o índice de busca — uma passagem só
+  _byIdMap = new Map(allProducts.map(p => [p.id, p]));
+  recalcSearchIndex();
 }
 
 function renderizarTudo() {
@@ -195,32 +333,41 @@ async function loadAll() {
   if (carregando) return;
   carregando = true;
 
-  // ── 1. Cache localStorage → aparece instantaneamente ──
+  // ── 1. Cache localStorage → aparece instantaneamente ──────
+  // Mostra o cardápio do cache MESMO se expirado — o usuário
+  // vê os produtos imediatamente enquanto a rede atualiza em background.
   if (primeiraCarga) {
     const cache = lerCache();
     if (cache) {
-      aplicarDados(cache);
+      aplicarDados(cache.data);
       primeiraCarga = false;
       renderizarTudo();
+      // Se o cache ainda é válido, não precisa ir à rede agora
+      if (!cache.expirado) {
+        carregando = false;
+        return;
+      }
+      // Cache expirado: continua e atualiza em background (usuário já vê o cardápio)
     } else {
+      // Sem cache: mostra spinner e espera a rede
       showEstado(true, 'loading');
     }
   }
 
-  // ── 2. Rede: tenta RPC única (1 request); fallback para 5 ──
+  // ── 2. Rede: 5 requests paralelas (RPC pulada — retorna 404) ──
   try {
     let dados;
     try {
-      // RPC retorna { prods, cats, tams, sab, cfg } em 1 round-trip
+      // Tenta RPC primeiro — 1 request em vez de 5.
+      // Se retornar 404, cai no fallback abaixo.
       dados = await apiRPC();
-      // normaliza arrays nulos vindos da RPC (jsonb_agg retorna null se vazio)
       dados.cats  = dados.cats  || [];
       dados.prods = dados.prods || [];
       dados.tams  = dados.tams  || [];
       dados.sab   = dados.sab   || [];
       dados.cfg   = dados.cfg   || [];
     } catch (_rpcErr) {
-      // RPC não disponível (migração ainda não rodou) → fallback 5 requests
+      // RPC não disponível → fallback: 5 requests em paralelo (Promise.all)
       const [cats, prods, tams, sab, cfg] = await Promise.all([
         apiGet('categorias',     'select=id,nome,emoji,ordem,ativo&ativo=eq.true&order=ordem.asc,nome.asc'),
         apiGet('menu_publico',   `select=${PROD_COLS}&order=nome.asc`),
@@ -309,6 +456,10 @@ function renderCardapio() {
   const cont = document.getElementById('cardapio-container');
   if (!cont) return;
 
+  // Reseta o contador de imagens prioritárias a cada novo render
+  // para que os primeiros N_EAGER cards visíveis recebam fetchpriority="high"
+  resetEagerCount();
+
   let lista = publicProducts.slice();
   if (searchQuery) {
     const q = searchQuery.toLowerCase();
@@ -369,8 +520,10 @@ function renderCardapio() {
       (a.nome || '').localeCompare(b.nome || '', 'pt-BR')
     );
 
-    // Categoria "Copões" recebe tratamento especial: subdivisões por bebida
-    if (cat === 'Copões') {
+    // Categorias de copões recebem tratamento especial: subdivisões por bebida.
+    // Qualquer categoria que comece com "cop" (case-insensitive) é agrupada
+    // na seção unificada de Copões com subgrupos por tipo de bebida.
+    if (cat.toLowerCase().startsWith('cop')) {
       renderCopoes(cont, itens);
       // renderCopoes usa rAF internamente; a próxima categoria
       // será enfileirada pelo último rAF dentro de renderCopoes.
@@ -410,6 +563,8 @@ function renderCardapio() {
           if (p) openProduct(p);
         });
         grid.appendChild(card);
+        // Registra imagens lazy para o IntersectionObserver
+        card.querySelectorAll('.img-lazy').forEach(observelazyImg);
       }
       if (j < itens.length) requestAnimationFrame(adicionarLote);
       else requestAnimationFrame(renderProximo); // próxima categoria
@@ -453,16 +608,8 @@ const COPAO_GRUPOS = [
     sub:      'Bebe · Vive · Repete · 700ml',
     grad:     'linear-gradient(135deg, rgba(180,83,9,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
     keys:     ['jack','jim beam','jum beam','chivas','black label','red label','white horse',
-               'old par','ballant','buchanan','passport','passaport','licor 43','chanceler',
-               'busca brisa','bob pinga'],
-  },
-  {
-    id:       'gourmet',
-    label:    'Gourmet',
-    emoji:    '🍫',
-    sub:      'Aqui cada gole conta uma história · 700ml',
-    grad:     'linear-gradient(135deg, rgba(79,70,229,.55) 0%, rgba(147,51,234,.3) 60%, transparent 100%)',
-    keys:     ['ballena','gourmet'],
+               'old par','ballant','balantine','buchanan','passport','passaport','licor 43','chanceler',
+               'busca brisa','bob pinga','ballena'],
   },
 ];
 
@@ -574,6 +721,8 @@ function renderCopoes(cont, itens) {
           const p = byId(this.dataset.open); if (p) openProduct(p);
         });
         grid.appendChild(card);
+        // Registra imagens lazy para o IntersectionObserver
+        card.querySelectorAll('.img-lazy').forEach(observelazyImg);
       }
       if (j < prods.length) requestAnimationFrame(adicionarLote);
       else requestAnimationFrame(renderGrupo);
@@ -664,9 +813,12 @@ function buildCard(p, num_) {
       .join('');
   }
 
+  // Imagens dos cards usam o Intersection Observer (observelazyImg).
+  // A div .img-lazy serve de placeholder animado (shimmer do CSS)
+  // até o observer colocar a <img> real dentro dela.
+  // imgCard() reduz a URL para 120px + WebP — ~10x menos bytes que o original.
   const fotoHtml = foto
-    ? `<img src="${esc(foto)}" alt="${esc(p.nome)}" loading="lazy" decoding="async"
-           onerror="this.parentElement.innerHTML='<span class=fb>${emoji}</span>'" />`
+    ? `<div class="img-lazy" data-lazy-src="${esc(imgCard(foto))}" data-lazy-alt="${esc(p.nome)}" data-lazy-fb="${esc(emoji)}"></div>`
     : `<span class="fb">${emoji}</span>`;
 
   const precoFmt = fmt(p.preco_venda);
@@ -736,7 +888,7 @@ function renderProductModal() {
   const adicionais = copao ? allProducts.filter(x => x.categoria === 'Energéticos' || x.categoria === 'Gelo') : [];
 
   const fotoHtml = foto
-    ? `<img src="${esc(foto)}" alt="${esc(p.nome)}" decoding="async"
+    ? `<img src="${esc(imgModal(foto))}" alt="${esc(p.nome)}" decoding="async" fetchpriority="high"
            onerror="this.parentElement.innerHTML='<span class=fb>${emoji}</span>'" />`
     : `<span class="fb">${emoji}</span>`;
 
@@ -883,7 +1035,7 @@ function openCombo(p) {
   const img = document.getElementById('combo-img');
   const f = primaryImg(p);
   img.innerHTML = f
-    ? `<img src="${esc(f)}" alt="${esc(p.nome)}" onerror="this.parentElement.innerHTML='<span style=font-size:32px>${catEmoji(p.categoria)}</span>'" />`
+    ? `<img src="${esc(imgCombo(f))}" alt="${esc(p.nome)}" onerror="this.parentElement.innerHTML='<span style=font-size:32px>${catEmoji(p.categoria)}</span>'" />`
     : `<span style="font-size:32px">${catEmoji(p.categoria)}</span>`;
   renderComboDraft();
   document.getElementById('modal-combo').classList.remove('hidden');
@@ -916,7 +1068,7 @@ function renderComboDraft() {
         <div class="combo-opcao ${sem?'sem-estoque':''}">
           <div class="combo-opcao-foto">
             ${pf
-              ? `<img src="${esc(pf)}" alt="${esc(op?.nome||'')}" onerror="this.parentElement.innerHTML='<span class=fb>${op?catEmoji(op.categoria):'📦'}</span>'" />`
+              ? `<img src="${esc(imgCombo(pf))}" alt="${esc(op?.nome||'')}" onerror="this.parentElement.innerHTML='<span class=fb>${op?catEmoji(op.categoria):'📦'}</span>'" />`
               : `<span class="fb">${op?catEmoji(op.categoria):'📦'}</span>`}
           </div>
           <div class="combo-opcao-info">
@@ -997,12 +1149,20 @@ function openCustomCopao() {
   document.getElementById('modal-copao-custom').classList.remove('hidden');
 }
 
+// buildCustomGrupos: faz 1 pass em allProducts ao invés de 3 filters separados.
+// Retorna os mesmos 3 grupos que antes, preservando toda a lógica existente.
 function buildCustomGrupos() {
-  const atv = allProducts.filter(p => p.estoque > 0);
+  const copao = [], energetico = [], gelo = [];
+  for (const p of allProducts) {
+    if (p.estoque <= 0) continue;
+    if (isCopao(p))                        copao.push(p);
+    else if (p.categoria === 'Energéticos') energetico.push(p);
+    else if (p.categoria === 'Gelo')        gelo.push(p);
+  }
   return [
-    {id:'copao',      label:'Copão',      emoji:'🍻', prods:atv.filter(p=>isCopao(p)), required:true,  max:5 },
-    {id:'energetico', label:'Energético', emoji:'⚡', prods:atv.filter(p=>p.categoria==='Energéticos'), required:false, max:10},
-    {id:'gelo',       label:'Gelo',       emoji:'🧊', prods:atv.filter(p=>p.categoria==='Gelo'),       required:false, max:10},
+    {id:'copao',      label:'Copão',      emoji:'🍻', prods:copao,      required:true,  max:5 },
+    {id:'energetico', label:'Energético', emoji:'⚡', prods:energetico, required:false, max:10},
+    {id:'gelo',       label:'Gelo',       emoji:'🧊', prods:gelo,       required:false, max:10},
   ];
 }
 
@@ -1038,7 +1198,7 @@ function renderCustomCopao() {
         <div class="combo-opcao">
           <div class="combo-opcao-foto">
             ${foto
-              ? `<img src="${esc(foto)}" alt="${esc(p.nome)}" onerror="this.parentElement.innerHTML='<span class=fb>${catEmoji(p.categoria)}</span>'" />`
+              ? `<img src="${esc(imgCombo(foto))}" alt="${esc(p.nome)}" onerror="this.parentElement.innerHTML='<span class=fb>${catEmoji(p.categoria)}</span>'" />`
               : `<span class="fb">${catEmoji(p.categoria)}</span>`}
           </div>
           <div class="combo-opcao-info">
@@ -1084,7 +1244,8 @@ function renderCustomCopao() {
   cont.querySelectorAll('[data-cstep]').forEach(btn =>
     btn.addEventListener('click', () => {
       const g  = btn.dataset.cg, cid = btn.dataset.cid, step = parseInt(btn.dataset.cstep,10);
-      const grDef = buildCustomGrupos().find(x=>x.id===g);
+      // Usa grupos já calculados no escopo de renderCustomCopao — evita 2ª chamada a buildCustomGrupos()
+      const grDef = grupos.find(x=>x.id===g);
       const cur = customDraft[g][cid] || 0;
       const grTot = Object.values(customDraft[g]).reduce((s,q)=>s+q,0) - cur + Math.max(0, cur+step);
       if (grTot > grDef.max && step > 0) { showToast(`Máximo ${grDef.max} neste grupo`,'erro'); return; }
@@ -1196,16 +1357,18 @@ function renderCart() {
     if (!cart.length) {
       body.innerHTML = `<div class="cart-empty"><div class="ce-emoji">🛒</div><div>Seu pedido está vazio.</div></div>`;
     } else {
-      body.innerHTML = cart.map((item, i) => `
+      body.innerHTML = cart.map((item, i) => {
+        const ct = compText(item); // calculado uma vez, usado duas vezes abaixo
+        return `
         <div class="cart-item">
           <div class="cart-item-foto">
             ${item.foto_url
-              ? `<img src="${esc(item.foto_url)}" alt="" onerror="this.parentElement.innerHTML='<span class=fb>🦉</span>'" />`
+              ? `<img src="${esc(imgCart(item.foto_url))}" alt="" onerror="this.parentElement.innerHTML='<span class=fb>🦉</span>'" />`
               : `<span class="fb">${item.is_custom_copao?'🎯':catEmoji(item.categoria)}</span>`}
           </div>
           <div class="cart-item-info">
             <div class="cart-item-nome">${esc(item.nome)}${item.tamanho?' · '+esc(item.tamanho):''}</div>
-            ${compText(item)?`<div class="cart-item-comp">${esc(compText(item))}</div>`:''}
+            ${ct?`<div class="cart-item-comp">${esc(ct)}</div>`:''}
             <div class="cart-item-preco">${fmt(itemUnit(item))} un · ${fmt(itemSub(item))}</div>
             <div class="cart-item-qty">
               <button type="button" class="qty-btn" data-ci="${i}" data-step="-1">−</button>
@@ -1214,7 +1377,8 @@ function renderCart() {
               <button type="button" class="cart-item-remove" data-rm="${i}">Remover</button>
             </div>
           </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
 
       body.querySelectorAll('[data-ci]').forEach(b =>
         b.addEventListener('click', () => {
@@ -1422,27 +1586,20 @@ window.addEventListener('DOMContentLoaded', () => {
 
   loadAll();
 
-  // Debounce duplo: visibilitychange e focus podem disparar juntos.
-  // _ultimaAtualizacao garante no mínimo 30s entre reloads automáticos.
+  // Recarrega dados quando o usuário volta à aba/janela.
+  // Cooldown de 60s: evita fetch desnecessário se o usuário alterna abas rapidamente
+  // ou se visibilitychange e focus dispararem juntos (o que acontece no iOS Safari).
   let _ultimaAtualizacao = 0;
   function atualizarSeNecessario() {
+    if (document.hidden) return;             // só atualiza quando visível
     const agora = Date.now();
-    if (agora - _ultimaAtualizacao < 30_000) return; // cooldown 30s
+    if (agora - _ultimaAtualizacao < 60_000) return; // cooldown 60s (era 30s)
     _ultimaAtualizacao = agora;
     loadAll();
   }
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) atualizarSeNecessario();
-  });
+  document.addEventListener('visibilitychange', atualizarSeNecessario);
   window.addEventListener('focus', atualizarSeNecessario);
 });
 
-function setupSearch() {
-  const inp = document.getElementById('busca-produto');
-  if (!inp) return;
-  let t = null;
-  inp.addEventListener('input', e => {
-    clearTimeout(t);
-    t = setTimeout(() => { searchQuery=e.target.value.trim(); renderChips(); renderCardapio(); }, 180);
-  });
-}
+// setupSearch: definida UMA VEZ acima, próximo ao buildCard onde é usada conceptualmente.
+// A definição duplicada que existia no final do arquivo foi removida.

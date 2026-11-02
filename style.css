@@ -1,9 +1,8 @@
 /* ============================================================
    ADEGA CORUJÃO — CARDÁPIO PÚBLICO
    Preto profundo · roxo neon · "A noite tem dono."
+   @import removido — fonte carregada via <link> no HTML (não bloqueia render)
    ============================================================ */
-
-@import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;800;900&display=swap');
 
 /* ── VARIÁVEIS ──────────────────────────────────────────── */
 :root {
@@ -42,13 +41,14 @@ html, body {
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;
+  max-width: 100%;
 }
 body { min-height: 100dvh; }
 img { max-width: 100%; display: block; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 input, textarea, select { font-family: inherit; }
 .hidden { display: none !important; }
-.app { max-width: var(--maxw); margin: 0 auto; }
+.app { max-width: var(--maxw); margin: 0 auto; width: 100%; }
 
 /* ── HERO ──────────────────────────────────────────────── */
 .hero {
@@ -189,7 +189,7 @@ input, textarea, select { font-family: inherit; }
 }
 
 /* ── MAIN ──────────────────────────────────────────────── */
-.main { padding: 0 0 24px; }
+.main { padding: 0 0 24px; overflow: hidden; }
 
 /* ── ESTADO ────────────────────────────────────────────── */
 .estado-cardapio { padding: 60px 16px; text-align: center; }
@@ -211,11 +211,22 @@ input, textarea, select { font-family: inherit; }
   border-radius: 50%;
   margin: 0 auto 14px;
   animation: spin .7s linear infinite;
+  will-change: transform; /* promove para layer GPU — elimina repaint a cada frame */
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── HEADER DE CATEGORIA ───────────────────────────────── */
-.cat-section { margin-bottom: 0; }
+/* content-visibility: auto — o browser pula o layout e paint de seções
+   completamente fora da viewport. Em cardápios com 8+ categorias isso
+   pode cortar o tempo de renderização inicial pela metade.
+   contain-intrinsic-size evita que o scroll bar pule ao rolar (CLS). */
+.cat-section {
+  margin-bottom: 0;
+  content-visibility: auto;
+  contain-intrinsic-size: 0 600px; /* estimativa conservadora da altura de cada seção */
+  /* garante que seção não vaze lateralmente */
+  overflow: hidden;
+}
 
 .cat-header {
   position: relative;
@@ -282,7 +293,7 @@ input, textarea, select { font-family: inherit; }
   text-transform: uppercase;
   color: var(--text3);
   margin-top: 5px;
-  white-space: nowrap;
+  /* nowrap só em telas >= 640px (via media query) — em mobile permite quebra */
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -310,6 +321,9 @@ input, textarea, select { font-family: inherit; }
   grid-template-columns: 1fr;       /* mobile: 1 coluna */
   gap: 1px;
   background: var(--border);
+  /* garante que o grid não vaze para fora do contêiner */
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* ── CARD DE PRODUTO ───────────────────────────────────── */
@@ -327,8 +341,9 @@ input, textarea, select { font-family: inherit; }
   padding: 12px 14px;
   cursor: pointer;
   transition: background .12s;
-  /* overflow:hidden aqui cortaria texto — usar visible */
-  overflow: visible;
+  /* min-width: 0 garante que o flex item não exceda a coluna do grid */
+  min-width: 0;
+  overflow: hidden;
 }
 .item-card:hover  { background: var(--card2); }
 .item-card:active { background: #1a1a22; }
@@ -568,10 +583,11 @@ input, textarea, select { font-family: inherit; }
   font-weight: 800;
   font-size: 13px;
   letter-spacing: .03em;
-  padding: 12px 14px;
+  padding: 12px 10px;
   border-radius: var(--rs);
   white-space: nowrap;
   flex-shrink: 0;
+  /* em telas muito pequenas o texto encurta via font-size no breakpoint */
 }
 .cart-bar-send:hover { background: #16a34a; }
 
@@ -593,6 +609,7 @@ input, textarea, select { font-family: inherit; }
   transform: translateX(100%);
   transition: transform .24s ease;
   display: flex; flex-direction: column;
+  will-change: transform; /* GPU — evita repaint durante a animação de slide */
 }
 .drawer.open { transform: translateX(0); }
 .drawer-header {
@@ -689,7 +706,10 @@ input, textarea, select { font-family: inherit; }
   width: 100%; max-width: 520px;
   max-height: 92dvh;
   overflow-y: auto;
+  /* garante que em mobile o modal não encoste nas bordas laterais */
+  margin: 0;
   animation: slideUp .22s ease;
+  will-change: transform, opacity;
 }
 @keyframes slideUp { from { transform: translateY(28px); opacity: .5; } to { transform: translateY(0); opacity: 1; } }
 .modal-close {
@@ -868,57 +888,149 @@ input, textarea, select { font-family: inherit; }
 .toast.ok   { border-color: var(--green); }
 
 /* ══════════════════════════════════════════════════════════
-   RESPONSIVIDADE
+   RESPONSIVIDADE — mobile-first
+   320px  → base (definições acima, 1 coluna)
+   360px  → ajustes para telas muito estreitas (max-width)
+   480px  → mobile médio / landscape de bolso
+   640px  → tablet portrait / landscape mobile grande
+   768px  → tablet
+   960px  → tablet largo / laptop pequeno
+   1240px → desktop
+   1480px → telas grandes
    ══════════════════════════════════════════════════════════ */
 
-/* ── 360 px — smartphones pequenos ─────────────────────── */
+/* ── até 359 px — smartphones muito pequenos (Galaxy A-series etc.) */
 @media (max-width: 359px) {
-  .item-num  { display: none; }
-  .item-foto { width: 46px; height: 46px; }
-  .item-nome { font-size: 13px; }
-  .item-preco { font-size: 18px; }
-  .item-action { min-width: 68px; }
-  .item-btn  { padding: 5px 8px; font-size: 10px; }
-  .cat-title { font-size: clamp(24px, 8vw, 40px); }
-  .copao-banner-title { font-size: 16px; }
-  .copao-banner-btn   { font-size: 11px; padding: 7px 12px; }
-  .hero-brand { font-size: clamp(44px, 14vw, 70px); }
+  /* Hero */
+  .hero-brand  { font-size: clamp(38px, 13vw, 56px); }
+  .hero-tagline { letter-spacing: .16em; }
+
+  /* Nav */
+  .sticky-nav-inner { padding: 8px 10px 0; }
+  .search-wrap      { padding: 8px 11px; }
+  .chip             { padding: 5px 11px; font-size: 12px; }
+
+  /* Cards */
+  .item-card   { padding: 10px 10px; gap: 8px; }
+  .item-num    { display: none; }                  /* economiza 38px */
+  .item-foto   { width: 46px; height: 46px; }
+  .item-nome   { font-size: 13px; }
+  .item-action { min-width: 66px; }
+  .item-preco  { font-size: 17px; }
+  .item-btn    { padding: 6px 8px; font-size: 10px; letter-spacing: .04em; }
+
+  /* Header categoria */
+  .cat-title   { font-size: clamp(22px, 8vw, 36px); }
+  .cat-sub     { white-space: normal; }            /* permite quebra de linha */
+  .cat-badge   { display: none; }                  /* remove badge em telas mínimas */
+
+  /* Banner copão */
+  .copao-banner        { padding: 14px 10px; gap: 8px; }
+  .copao-banner-title  { font-size: clamp(15px, 4.5vw, 20px); }
+  .copao-banner-sub    { display: none; }
+  .copao-banner-btn    { font-size: 10px; padding: 7px 10px; }
+
+  /* Subheader copão */
+  .copao-sub-titulo { font-size: clamp(18px, 6vw, 28px); }
+  .copao-sub-desc   { display: none; }
+
+  /* Cart bar */
+  .cart-bar-send { font-size: 11px; padding: 10px 10px; }
+  .cart-bar-left { font-size: 12px; }
+
+  /* Loja info */
+  .loja-info { margin: 16px 10px 0; padding: 14px; }
 }
 
-/* ── 640 px — tablets e landscape mobile ───────────────── */
+/* ── 360 px – 479 px — smartphones padrão */
+@media (min-width: 360px) and (max-width: 479px) {
+  .item-card  { padding: 11px 12px; gap: 9px; }
+  .item-foto  { width: 52px; height: 52px; }
+  .item-preco { font-size: 20px; }
+  .cat-sub    { white-space: normal; }
+}
+
+/* ── 480 px — mobile médio / landscape de bolso ──────────── */
+@media (min-width: 480px) {
+  .item-card   { padding: 12px 16px; gap: 10px; }
+  .item-foto   { width: 60px; height: 60px; }
+  .item-nome   { font-size: 14px; }
+  .item-preco  { font-size: 21px; }
+  .item-action { min-width: 82px; }
+
+  /* Cat header cresce um pouco */
+  .cat-header  { padding: 26px 20px 20px; }
+
+  /* Banner copão: sub volta a aparecer */
+  .copao-banner-sub { display: block; }
+}
+
+/* ── 640 px — tablet portrait / landscape mobile grande ─── */
 @media (min-width: 640px) {
-  .cat-items { grid-template-columns: repeat(2, 1fr); }
-  .item-card { padding: 14px 15px; gap: 11px; }
-  .item-foto { width: 66px; height: 66px; }
-  .item-nome { font-size: 15px; }
-  .item-preco { font-size: 22px; }
+  /* Grid: 2 colunas */
+  .cat-items   { grid-template-columns: repeat(2, 1fr); }
+
+  .item-card   { padding: 14px 15px; gap: 11px; }
+  .item-foto   { width: 66px; height: 66px; }
+  .item-nome   { font-size: 15px; }
+  .item-preco  { font-size: 22px; }
   .item-action { min-width: 84px; }
+
+  /* Info da loja: 2 colunas */
   .loja-info-grid { grid-template-columns: 1fr 1fr; }
-  .modal { align-items: center; padding: 20px; }
-  .modal-box { border-radius: 20px; }
+
+  /* Modais: centraliza e arredonda */
+  .modal      { align-items: center; padding: 20px; }
+  .modal-box  { border-radius: 20px; }
+
+  /* Cat sub pode ficar nowrap novamente com espaço suficiente */
+  .cat-sub    { white-space: nowrap; }
+}
+
+/* ── 768 px — tablet ─────────────────────────────────────── */
+@media (min-width: 768px) {
+  .item-card  { padding: 14px 16px; gap: 12px; }
+  .item-foto  { width: 68px; height: 68px; }
+  .cat-header { padding: 28px 22px 24px; min-height: 105px; }
+  .cat-title  { font-size: clamp(30px, 5.5vw, 60px); }
+
+  /* Copão banner mais generoso */
+  .copao-banner       { padding: 20px 20px; }
+  .copao-banner-title { font-size: clamp(20px, 4vw, 32px); }
+
+  /* Cart bar com mais folga */
+  .cart-bar { padding: 12px 20px calc(12px + env(safe-area-inset-bottom)); }
 }
 
 /* ── 960 px — tablet largo / laptop pequeno ────────────── */
 @media (min-width: 960px) {
-  .cat-items { grid-template-columns: repeat(3, 1fr); }
-  .item-card { padding: 15px 17px; }
-  .item-foto { width: 70px; height: 70px; }
+  /* Grid: 3 colunas */
+  .cat-items  { grid-template-columns: repeat(3, 1fr); }
+
+  .item-card  { padding: 15px 17px; }
+  .item-foto  { width: 70px; height: 70px; }
   .item-preco { font-size: 23px; }
   .cat-header { padding: 32px 22px 26px; min-height: 110px; }
   .cat-title  { font-size: clamp(32px, 5vw, 68px); }
+
+  /* Info da loja: 3 colunas */
+  .loja-info-grid { grid-template-columns: 1fr 1fr 1fr; }
 }
 
-/* ── 1200 px — desktop largo ────────────────────────────── */
-@media (min-width: 1200px) {
-  .cat-items { grid-template-columns: repeat(4, 1fr); }
+/* ── 1240 px — desktop ───────────────────────────────────── */
+@media (min-width: 1240px) {
+  /* Grid: 4 colunas — margem de +40px sobre max-width 1200px para scrollbar */
+  .cat-items  { grid-template-columns: repeat(4, 1fr); }
+
   .item-preco { font-size: 24px; }
   .item-action { min-width: 88px; }
   .cat-header { padding: 36px 28px 28px; }
   .cat-title  { font-size: clamp(36px, 4vw, 72px); }
 }
 
-/* ── 1440 px — telas grandes ────────────────────────────── */
-@media (min-width: 1440px) {
+/* ── 1480 px — telas grandes ─────────────────────────────── */
+@media (min-width: 1480px) {
+  /* Grid: 5 colunas */
   .cat-items { grid-template-columns: repeat(5, 1fr); }
 }
 
@@ -926,6 +1038,8 @@ input, textarea, select { font-family: inherit; }
 .copao-subsecao {
   /* separa visualmente cada subgrupo dentro da seção Copões */
   border-bottom: 1px solid var(--border);
+  content-visibility: auto;
+  contain-intrinsic-size: 0 400px;
 }
 .copao-sub-header {
   position: relative;
@@ -977,3 +1091,21 @@ input, textarea, select { font-family: inherit; }
   white-space: nowrap;
   flex-shrink: 0;
 }
+
+/* ── LAZY IMAGE PLACEHOLDER ─────────────────────────────── */
+/* Enquanto a imagem não carrega, exibe um fundo animado     */
+.img-lazy {
+  background: linear-gradient(90deg, var(--card) 25%, var(--card2) 50%, var(--card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  will-change: background-position; /* GPU — shimmer sem repaint a cada frame */
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+/* Remove shimmer quando imagem carregou */
+.img-lazy.loaded { animation: none; background: none; will-change: auto; }
+/* Imagem dentro do placeholder — invisible até src ser atribuído */
+.img-lazy img { opacity: 0; transition: opacity .25s ease; }
+.img-lazy.loaded img { opacity: 1; }

@@ -6,17 +6,59 @@
   <meta name="theme-color" content="#070709" />
   <title>Adega Corujão — Cardápio</title>
   <meta name="description" content="Cardápio da Adega Corujão. Escolha sua bebida e peça pelo WhatsApp. A noite tem dono." />
+  <!-- Optimização: desativa indexação automática de telefone que causa reflow no iOS -->
+  <meta name="format-detection" content="telephone=no" />
+  <!-- PWA manifest -->
+  <link rel="manifest" href="manifest.json" />
+  <!-- iOS PWA -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Corujão" />
+
+  <!-- ── CRITICAL CSS (inline) ──────────────────────────────────
+       Apenas o mínimo para o primeiro paint: fundo, hero, spinner.
+       Evita FOUC e mede FCP real sem esperar style.css da rede.
+  ─────────────────────────────────────────────────────────────── -->
+  <style>
+    :root{--bg:#070709;--bg2:#0e0e12;--card:#14141a;--card2:#1c1c24;--border:#26263a;--purple:#9333ea;--purple2:#a855f7;--purpled:#6d28d9;--pale:#c084fc;--glow:rgba(147,51,234,.4);--pink:#ec4899;--text:#f4f4f8;--text2:#a1a1b5;--text3:#6b6b82;--green:#22c55e;--red:#ef4444;--amber:#f59e0b;--fd:'Bebas Neue',Impact,sans-serif;--fb:'Inter',system-ui,sans-serif;--r:16px;--rs:10px;--maxw:1200px}
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth}
+    html,body{background:var(--bg);color:var(--text);font-family:var(--fb);font-size:16px;line-height:1.4;-webkit-font-smoothing:antialiased;overflow-x:hidden;max-width:100%}
+    body{min-height:100dvh}
+    .app{max-width:var(--maxw);margin:0 auto}
+    /* Hero mínimo para primeiro paint */
+    .hero{position:relative;overflow:hidden;min-height:clamp(240px,38vw,440px);display:flex;flex-direction:column;align-items:center;justify-content:flex-end;padding:0 16px 32px;text-align:center}
+    .hero::before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse 70% 60% at 50% 30%,rgba(147,51,234,.5) 0%,transparent 70%),linear-gradient(180deg,#0c000f 0%,var(--bg) 100%);z-index:0}
+    .hero-inner{position:relative;z-index:1}
+    .hero-owl{font-size:clamp(50px,13vw,86px);line-height:1;display:block;margin-bottom:2px;filter:drop-shadow(0 0 20px rgba(147,51,234,.9))}
+    .hero-adega{font-family:var(--fd);font-size:clamp(14px,4.5vw,24px);letter-spacing:.32em;color:var(--text2)}
+    .hero-brand{font-family:var(--fd);font-size:clamp(50px,15vw,108px);letter-spacing:.04em;line-height:1;background:linear-gradient(135deg,#fff 0%,var(--pale) 40%,var(--pink) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 16px rgba(147,51,234,.6))}
+    .hero-tagline{font-size:clamp(9px,2.8vw,12px);letter-spacing:.26em;text-transform:uppercase;color:var(--pale);font-weight:700;margin-top:10px}
+    .hero-pills{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:14px}
+    .hero-pill{padding:5px 13px;border-radius:999px;border:1px solid rgba(168,85,247,.5);font-size:11px;font-weight:700;letter-spacing:.08em;color:var(--pale);background:rgba(147,51,234,.12)}
+    /* Spinner de carregamento (estado inicial) */
+    .hidden{display:none!important}
+    .estado-cardapio{padding:60px 16px;text-align:center}
+    .estado-box{max-width:360px;margin:0 auto;background:var(--card);border:1px solid var(--border);border-radius:var(--r);padding:30px 22px}
+    .estado-titulo{font-size:18px;font-weight:800;margin-bottom:6px}
+    .estado-texto{color:var(--text2);font-size:13px;line-height:1.5}
+    .spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--purple);border-radius:50%;margin:0 auto 14px;animation:spin .7s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+
+  <!-- ── PRELOAD: recursos críticos para o primeiro paint ──────
+       style.css é o único bloqueador de render externo relevante.
+       Declará-lo como preload antecipa o download antes que o
+       parser chegue ao <link rel="stylesheet"> abaixo.
+       app.js usa defer — não precisa de preload (não bloqueia).
+  ─────────────────────────────────────────────────────────────── -->
+  <link rel="preload" href="style.css" as="style" />
+
+  <!-- ── FONT: Google Fonts (não bloqueia render) ────────────── -->
+  <!-- preconnect adianta o handshake TLS antes de qualquer request -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="preconnect" href="https://fykqqioozgotmmebtlix.supabase.co" crossorigin />
-  <link rel="dns-prefetch" href="https://fykqqioozgotmmebtlix.supabase.co" />
-  <!-- CSS crítico carregado imediatamente -->
-  <link rel="stylesheet" href="style.css" />
-  <!-- Pré-carrega a fonte display antes do navegador descobri-la no CSS -->
-  <link rel="preload" as="font"
-        href="https://fonts.gstatic.com/s/bebasnueve/v10/JTUSjIg69CK48gW7PXoo9WlhyyTh89ZNpQ.woff2"
-        type="font/woff2" crossorigin="anonymous" />
-  <!-- Carrega a folha de fontes sem bloquear render -->
+  <!-- Carrega assincronamente — media=print só executa onload depois -->
   <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;800;900&display=swap"
         media="print" onload="this.media='all'" />
@@ -24,6 +66,14 @@
     <link rel="stylesheet"
           href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;600;700;800;900&display=swap" />
   </noscript>
+
+  <!-- ── CSS principal ─────────────────────────────────────────
+       preload acima já iniciou o download; este link o aplica.
+       preconnect para o Supabase aqui pois é onde os dados vêm.
+  ─────────────────────────────────────────────────────────────── -->
+  <link rel="preconnect" href="https://fykqqioozgotmmebtlix.supabase.co" crossorigin />
+  <link rel="dns-prefetch" href="https://fykqqioozgotmmebtlix.supabase.co" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 <div id="app" class="app">
@@ -177,6 +227,22 @@
 <!-- Toast -->
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-<script src="app.js" defer></script>
+<!-- fetchpriority=high sinaliza ao browser que este script é
+     o mais importante após o CSS — antecipa o download sem bloquear -->
+<script src="app.js" defer fetchpriority="high"></script>
+<!-- Registra o Service Worker para funcionar offline.
+     Usa 'load' para não competir com recursos críticos do primeiro paint. -->
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('sw.js')
+        .then(reg => {
+          // Verifica atualização silenciosa a cada 30min
+          setInterval(() => reg.update(), 30 * 60 * 1000);
+        })
+        .catch(err => console.warn('SW:', err));
+    });
+  }
+</script>
 </body>
 </html>

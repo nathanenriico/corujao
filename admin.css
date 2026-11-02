@@ -331,3 +331,63 @@
   border-top: 1px solid var(--border);
   padding-top: 14px;
 }
+
+/* ══════════════════════════════════════════════════════════
+   ADMIN — RESPONSIVIDADE EXTRA
+   ══════════════════════════════════════════════════════════ */
+
+/* ── até 479 px — mobile pequeno/médio ───────────────────── */
+@media (max-width: 479px) {
+  .painel { padding: 0 10px 40px; }
+
+  /* Filtros: empilha verticalmente */
+  .filtros-produtos         { flex-direction: column; }
+  .filtros-produtos input   { min-width: 0; width: 100%; }
+  .filtros-produtos select  { min-width: 0; width: 100%; }
+
+  /* Formulário inline: empilha */
+  .admin-form-inline              { flex-direction: column; }
+  .admin-form-inline input,
+  .admin-form-inline select       { width: 100%; }
+  .admin-form-inline .btn-primary { width: 100%; }
+
+  /* Produto item: foto + info empilhados, toggle em linha separada */
+  .admin-prod-item {
+    grid-template-columns: 48px 1fr;
+    gap: 8px;
+  }
+  .admin-prod-item .ap-visivel {
+    grid-column: 1 / -1;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .admin-prod-item .ap-campos input.desc { min-width: 0; width: 100%; }
+
+  /* Modal editar: padding menor */
+  .modal-edit-form   { padding: 14px 14px 16px; }
+  .modal-edit-header { padding: 14px 14px; }
+  .edit-field        { min-width: 100%; }
+  .edit-field-lg     { min-width: 100%; }
+  .edit-row          { flex-direction: column; }
+}
+
+/* ── 480 px – 639 px ─────────────────────────────────────── */
+@media (min-width: 480px) and (max-width: 639px) {
+  .admin-form-inline input[type=text]  { flex: 1; min-width: 120px; }
+  .admin-form-inline input[type=number]{ width: 90px; }
+}
+
+/* ── 640 px+ — tablet / desktop ─────────────────────────── */
+@media (min-width: 640px) {
+  .admin-prod-item {
+    grid-template-columns: 56px 1fr auto;
+  }
+  .painel { padding: 0 20px 40px; }
+}
+
+/* ── 960 px+ — desktop ───────────────────────────────────── */
+@media (min-width: 960px) {
+  .painel { padding: 0 24px 40px; max-width: 1100px; margin: 0 auto; }
+  .admin-form { max-width: 640px; }
+}
